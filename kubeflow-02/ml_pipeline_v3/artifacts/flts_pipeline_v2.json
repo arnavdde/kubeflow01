@@ -1,0 +1,1080 @@
+{
+  "components": {
+    "comp-eval-component": {
+      "executorLabel": "exec-eval-component",
+      "inputDefinitions": {
+        "artifacts": {
+          "gru_model": {
+            "artifactType": {
+              "schemaTitle": "system.Model",
+              "schemaVersion": "0.0.1"
+            },
+            "isOptional": true
+          },
+          "lstm_model": {
+            "artifactType": {
+              "schemaTitle": "system.Model",
+              "schemaVersion": "0.0.1"
+            },
+            "isOptional": true
+          },
+          "prophet_model": {
+            "artifactType": {
+              "schemaTitle": "system.Model",
+              "schemaVersion": "0.0.1"
+            },
+            "isOptional": true
+          }
+        },
+        "parameters": {
+          "config_hash": {
+            "defaultValue": "",
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "gateway_url": {
+            "defaultValue": "http://fastapi-app:8000",
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "identifier": {
+            "defaultValue": "default",
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "mae_weight": {
+            "defaultValue": 0.3,
+            "isOptional": true,
+            "parameterType": "NUMBER_DOUBLE"
+          },
+          "mlflow_s3_endpoint": {
+            "defaultValue": "http://minio:9000",
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "mlflow_tracking_uri": {
+            "defaultValue": "http://mlflow:5000",
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "mse_weight": {
+            "defaultValue": 0.2,
+            "isOptional": true,
+            "parameterType": "NUMBER_DOUBLE"
+          },
+          "promotion_bucket": {
+            "defaultValue": "model-promotion",
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "rmse_weight": {
+            "defaultValue": 0.5,
+            "isOptional": true,
+            "parameterType": "NUMBER_DOUBLE"
+          }
+        }
+      },
+      "outputDefinitions": {
+        "artifacts": {
+          "promotion_pointer": {
+            "artifactType": {
+              "schemaTitle": "system.Artifact",
+              "schemaVersion": "0.0.1"
+            }
+          }
+        },
+        "parameters": {
+          "eval_metadata": {
+            "parameterType": "STRING"
+          }
+        }
+      }
+    },
+    "comp-inference-component": {
+      "executorLabel": "exec-inference-component",
+      "inputDefinitions": {
+        "artifacts": {
+          "inference_data": {
+            "artifactType": {
+              "schemaTitle": "system.Dataset",
+              "schemaVersion": "0.0.1"
+            },
+            "isOptional": true
+          },
+          "promoted_model": {
+            "artifactType": {
+              "schemaTitle": "system.Artifact",
+              "schemaVersion": "0.0.1"
+            },
+            "isOptional": true
+          }
+        },
+        "parameters": {
+          "batch_size": {
+            "defaultValue": 32.0,
+            "isOptional": true,
+            "parameterType": "NUMBER_INTEGER"
+          },
+          "enable_microbatch": {
+            "defaultValue": "false",
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "gateway_url": {
+            "defaultValue": "http://fastapi-app:8000",
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "identifier": {
+            "defaultValue": "default",
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "inference_length": {
+            "defaultValue": 1.0,
+            "isOptional": true,
+            "parameterType": "NUMBER_INTEGER"
+          },
+          "inference_log_bucket": {
+            "defaultValue": "inference-logs",
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "mlflow_s3_endpoint": {
+            "defaultValue": "http://minio:9000",
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "mlflow_tracking_uri": {
+            "defaultValue": "http://mlflow:5000",
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "sample_idx": {
+            "defaultValue": 0.0,
+            "isOptional": true,
+            "parameterType": "NUMBER_INTEGER"
+          }
+        }
+      },
+      "outputDefinitions": {
+        "artifacts": {
+          "inference_results": {
+            "artifactType": {
+              "schemaTitle": "system.Artifact",
+              "schemaVersion": "0.0.1"
+            }
+          }
+        },
+        "parameters": {
+          "inference_metadata": {
+            "parameterType": "STRING"
+          }
+        }
+      }
+    },
+    "comp-preprocess-component": {
+      "executorLabel": "exec-preprocess-component",
+      "inputDefinitions": {
+        "parameters": {
+          "clip_enable": {
+            "defaultValue": false,
+            "isOptional": true,
+            "parameterType": "BOOLEAN"
+          },
+          "clip_factor": {
+            "defaultValue": 1.5,
+            "isOptional": true,
+            "parameterType": "NUMBER_DOUBLE"
+          },
+          "clip_method": {
+            "defaultValue": "iqr",
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "dataset_name": {
+            "defaultValue": "PobleSec",
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "extra_hash_salt": {
+            "defaultValue": "",
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "force_reprocess": {
+            "defaultValue": 0.0,
+            "isOptional": true,
+            "parameterType": "NUMBER_INTEGER"
+          },
+          "gateway_url": {
+            "defaultValue": "http://fastapi-app:8000",
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "handle_nans": {
+            "defaultValue": true,
+            "isOptional": true,
+            "parameterType": "BOOLEAN"
+          },
+          "identifier": {
+            "defaultValue": "default",
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "input_bucket": {
+            "defaultValue": "dataset",
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "lags_enable": {
+            "defaultValue": false,
+            "isOptional": true,
+            "parameterType": "BOOLEAN"
+          },
+          "lags_n": {
+            "defaultValue": 0.0,
+            "isOptional": true,
+            "parameterType": "NUMBER_INTEGER"
+          },
+          "nans_knn": {
+            "defaultValue": 2.0,
+            "isOptional": true,
+            "parameterType": "NUMBER_INTEGER"
+          },
+          "nans_threshold": {
+            "defaultValue": 0.33,
+            "isOptional": true,
+            "parameterType": "NUMBER_DOUBLE"
+          },
+          "output_bucket": {
+            "defaultValue": "processed-data",
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "sample_seed": {
+            "defaultValue": 42.0,
+            "isOptional": true,
+            "parameterType": "NUMBER_INTEGER"
+          },
+          "sample_strategy": {
+            "defaultValue": "head",
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "sample_test_rows": {
+            "defaultValue": 0.0,
+            "isOptional": true,
+            "parameterType": "NUMBER_INTEGER"
+          },
+          "sample_train_rows": {
+            "defaultValue": 0.0,
+            "isOptional": true,
+            "parameterType": "NUMBER_INTEGER"
+          },
+          "scaler": {
+            "defaultValue": "MinMaxScaler",
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "time_features_enable": {
+            "defaultValue": true,
+            "isOptional": true,
+            "parameterType": "BOOLEAN"
+          }
+        }
+      },
+      "outputDefinitions": {
+        "artifacts": {
+          "inference_data": {
+            "artifactType": {
+              "schemaTitle": "system.Dataset",
+              "schemaVersion": "0.0.1"
+            }
+          },
+          "training_data": {
+            "artifactType": {
+              "schemaTitle": "system.Dataset",
+              "schemaVersion": "0.0.1"
+            }
+          }
+        },
+        "parameters": {
+          "config_hash": {
+            "parameterType": "STRING"
+          },
+          "config_json": {
+            "parameterType": "STRING"
+          }
+        }
+      }
+    },
+    "comp-train-gru-component": {
+      "executorLabel": "exec-train-gru-component",
+      "inputDefinitions": {
+        "artifacts": {
+          "training_data": {
+            "artifactType": {
+              "schemaTitle": "system.Dataset",
+              "schemaVersion": "0.0.1"
+            },
+            "isOptional": true
+          }
+        },
+        "parameters": {
+          "batch_size": {
+            "defaultValue": 32.0,
+            "isOptional": true,
+            "parameterType": "NUMBER_INTEGER"
+          },
+          "config_hash": {
+            "defaultValue": "",
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "dropout": {
+            "defaultValue": 0.2,
+            "isOptional": true,
+            "parameterType": "NUMBER_DOUBLE"
+          },
+          "early_stopping_patience": {
+            "defaultValue": 10.0,
+            "isOptional": true,
+            "parameterType": "NUMBER_INTEGER"
+          },
+          "gateway_url": {
+            "defaultValue": "http://fastapi-app:8000",
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "hidden_size": {
+            "defaultValue": 64.0,
+            "isOptional": true,
+            "parameterType": "NUMBER_INTEGER"
+          },
+          "learning_rate": {
+            "defaultValue": 0.001,
+            "isOptional": true,
+            "parameterType": "NUMBER_DOUBLE"
+          },
+          "mlflow_s3_endpoint": {
+            "defaultValue": "http://minio:9000",
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "mlflow_tracking_uri": {
+            "defaultValue": "http://mlflow:5000",
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "num_epochs": {
+            "defaultValue": 50.0,
+            "isOptional": true,
+            "parameterType": "NUMBER_INTEGER"
+          },
+          "num_layers": {
+            "defaultValue": 2.0,
+            "isOptional": true,
+            "parameterType": "NUMBER_INTEGER"
+          },
+          "window_size": {
+            "defaultValue": 12.0,
+            "isOptional": true,
+            "parameterType": "NUMBER_INTEGER"
+          }
+        }
+      },
+      "outputDefinitions": {
+        "artifacts": {
+          "model": {
+            "artifactType": {
+              "schemaTitle": "system.Model",
+              "schemaVersion": "0.0.1"
+            }
+          }
+        },
+        "parameters": {
+          "metrics": {
+            "parameterType": "STRING"
+          },
+          "run_id": {
+            "parameterType": "STRING"
+          }
+        }
+      }
+    },
+    "comp-train-lstm-component": {
+      "executorLabel": "exec-train-lstm-component",
+      "inputDefinitions": {
+        "artifacts": {
+          "training_data": {
+            "artifactType": {
+              "schemaTitle": "system.Dataset",
+              "schemaVersion": "0.0.1"
+            },
+            "isOptional": true
+          }
+        },
+        "parameters": {
+          "batch_size": {
+            "defaultValue": 32.0,
+            "isOptional": true,
+            "parameterType": "NUMBER_INTEGER"
+          },
+          "config_hash": {
+            "defaultValue": "",
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "dropout": {
+            "defaultValue": 0.2,
+            "isOptional": true,
+            "parameterType": "NUMBER_DOUBLE"
+          },
+          "early_stopping_patience": {
+            "defaultValue": 10.0,
+            "isOptional": true,
+            "parameterType": "NUMBER_INTEGER"
+          },
+          "gateway_url": {
+            "defaultValue": "http://fastapi-app:8000",
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "hidden_size": {
+            "defaultValue": 64.0,
+            "isOptional": true,
+            "parameterType": "NUMBER_INTEGER"
+          },
+          "learning_rate": {
+            "defaultValue": 0.001,
+            "isOptional": true,
+            "parameterType": "NUMBER_DOUBLE"
+          },
+          "mlflow_s3_endpoint": {
+            "defaultValue": "http://minio:9000",
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "mlflow_tracking_uri": {
+            "defaultValue": "http://mlflow:5000",
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "num_epochs": {
+            "defaultValue": 50.0,
+            "isOptional": true,
+            "parameterType": "NUMBER_INTEGER"
+          },
+          "num_layers": {
+            "defaultValue": 2.0,
+            "isOptional": true,
+            "parameterType": "NUMBER_INTEGER"
+          },
+          "window_size": {
+            "defaultValue": 12.0,
+            "isOptional": true,
+            "parameterType": "NUMBER_INTEGER"
+          }
+        }
+      },
+      "outputDefinitions": {
+        "artifacts": {
+          "model": {
+            "artifactType": {
+              "schemaTitle": "system.Model",
+              "schemaVersion": "0.0.1"
+            }
+          }
+        },
+        "parameters": {
+          "metrics": {
+            "parameterType": "STRING"
+          },
+          "run_id": {
+            "parameterType": "STRING"
+          }
+        }
+      }
+    },
+    "comp-train-prophet-component": {
+      "executorLabel": "exec-train-prophet-component",
+      "inputDefinitions": {
+        "artifacts": {
+          "training_data": {
+            "artifactType": {
+              "schemaTitle": "system.Dataset",
+              "schemaVersion": "0.0.1"
+            },
+            "isOptional": true
+          }
+        },
+        "parameters": {
+          "changepoint_prior_scale": {
+            "defaultValue": 0.05,
+            "isOptional": true,
+            "parameterType": "NUMBER_DOUBLE"
+          },
+          "config_hash": {
+            "defaultValue": "",
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "daily_seasonality": {
+            "defaultValue": false,
+            "isOptional": true,
+            "parameterType": "BOOLEAN"
+          },
+          "gateway_url": {
+            "defaultValue": "http://fastapi-app:8000",
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "holidays_prior_scale": {
+            "defaultValue": 10.0,
+            "isOptional": true,
+            "parameterType": "NUMBER_DOUBLE"
+          },
+          "mlflow_s3_endpoint": {
+            "defaultValue": "http://minio:9000",
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "mlflow_tracking_uri": {
+            "defaultValue": "http://mlflow:5000",
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "seasonality_mode": {
+            "defaultValue": "multiplicative",
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "seasonality_prior_scale": {
+            "defaultValue": 10.0,
+            "isOptional": true,
+            "parameterType": "NUMBER_DOUBLE"
+          },
+          "weekly_seasonality": {
+            "defaultValue": true,
+            "isOptional": true,
+            "parameterType": "BOOLEAN"
+          },
+          "yearly_seasonality": {
+            "defaultValue": true,
+            "isOptional": true,
+            "parameterType": "BOOLEAN"
+          }
+        }
+      },
+      "outputDefinitions": {
+        "artifacts": {
+          "model": {
+            "artifactType": {
+              "schemaTitle": "system.Model",
+              "schemaVersion": "0.0.1"
+            }
+          }
+        },
+        "parameters": {
+          "metrics": {
+            "parameterType": "STRING"
+          },
+          "run_id": {
+            "parameterType": "STRING"
+          }
+        }
+      }
+    }
+  },
+  "deploymentSpec": {
+    "executors": {
+      "exec-eval-component": {
+        "container": {
+          "args": [
+            "--executor_input",
+            "{{$}}",
+            "--function_to_execute",
+            "eval_component"
+          ],
+          "command": [
+            "sh",
+            "-c",
+            "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location 'kfp==2.15.2' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"$0\" \"$@\"\n",
+            "sh",
+            "-ec",
+            "program_path=$(mktemp -d)\n\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\n_KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+            "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import *\n\ndef eval_component(\n    promotion_pointer: dsl.Output[dsl.Artifact],\n    eval_metadata: dsl.OutputPath(str),\n    gru_model: dsl.Input[dsl.Model] = None,\n    lstm_model: dsl.Input[dsl.Model] = None,\n    prophet_model: dsl.Input[dsl.Model] = None,\n    config_hash: str = \"\",\n    identifier: str = \"default\",\n    mlflow_tracking_uri: str = \"http://mlflow:5000\",\n    mlflow_s3_endpoint: str = \"http://minio:9000\",\n    gateway_url: str = \"http://fastapi-app:8000\",\n    promotion_bucket: str = \"model-promotion\",\n    rmse_weight: float = 0.5,\n    mae_weight: float = 0.3,\n    mse_weight: float = 0.2,\n):\n    \"\"\"\n    Evaluate all trained models and promote the best one.\n\n    Compares GRU, LSTM, and Prophet models using weighted metrics,\n    selects the best performer, and writes a promotion pointer artifact.\n    \"\"\"\n    pass\n\n"
+          ],
+          "image": "eval-container:latest"
+        }
+      },
+      "exec-inference-component": {
+        "container": {
+          "args": [
+            "--executor_input",
+            "{{$}}",
+            "--function_to_execute",
+            "inference_component"
+          ],
+          "command": [
+            "sh",
+            "-c",
+            "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location 'kfp==2.15.2' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"$0\" \"$@\"\n",
+            "sh",
+            "-ec",
+            "program_path=$(mktemp -d)\n\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\n_KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+            "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import *\n\ndef inference_component(\n    inference_results: dsl.Output[dsl.Artifact],\n    inference_metadata: dsl.OutputPath(str),\n    inference_data: dsl.Input[dsl.Dataset] = None,\n    promoted_model: dsl.Input[dsl.Artifact] = None,\n    identifier: str = \"default\",\n    mlflow_tracking_uri: str = \"http://mlflow:5000\",\n    mlflow_s3_endpoint: str = \"http://minio:9000\",\n    gateway_url: str = \"http://fastapi-app:8000\",\n    inference_log_bucket: str = \"inference-logs\",\n    inference_length: int = 1,\n    sample_idx: int = 0,\n    enable_microbatch: str = \"false\",\n    batch_size: int = 32,\n):\n    \"\"\"\n    Run inference using the promoted model.\n\n    Loads the best model from the promotion pointer and generates predictions\n    on the inference dataset.\n    \"\"\"\n    pass\n\n"
+          ],
+          "image": "inference-container:latest"
+        }
+      },
+      "exec-preprocess-component": {
+        "container": {
+          "args": [
+            "--executor_input",
+            "{{$}}",
+            "--function_to_execute",
+            "preprocess_component"
+          ],
+          "command": [
+            "sh",
+            "-c",
+            "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location 'kfp==2.15.2' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"$0\" \"$@\"\n",
+            "sh",
+            "-ec",
+            "program_path=$(mktemp -d)\n\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\n_KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+            "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import *\n\ndef preprocess_component(\n    training_data: dsl.Output[dsl.Dataset],\n    inference_data: dsl.Output[dsl.Dataset],\n    config_hash: dsl.OutputPath(str),\n    config_json: dsl.OutputPath(str),\n    dataset_name: str = \"PobleSec\",\n    identifier: str = \"default\",\n    sample_train_rows: int = 0,\n    sample_test_rows: int = 0,\n    sample_strategy: str = \"head\",\n    sample_seed: int = 42,\n    force_reprocess: int = 0,\n    extra_hash_salt: str = \"\",\n    handle_nans: bool = True,\n    nans_threshold: float = 0.33,\n    nans_knn: int = 2,\n    clip_enable: bool = False,\n    clip_method: str = \"iqr\",\n    clip_factor: float = 1.5,\n    time_features_enable: bool = True,\n    lags_enable: bool = False,\n    lags_n: int = 0,\n    scaler: str = \"MinMaxScaler\",\n    gateway_url: str = \"http://fastapi-app:8000\",\n    input_bucket: str = \"dataset\",\n    output_bucket: str = \"processed-data\",\n):\n    \"\"\"\n    Preprocess raw time-series data into training and inference datasets.\n\n    The container image (flts-preprocess:latest) handles the actual preprocessing logic.\n    KFP v2 will pass these parameters to the container, which reads them and writes\n    outputs to the specified paths.\n    \"\"\"\n    pass  # Container handles execution\n\n"
+          ],
+          "image": "flts-preprocess:latest"
+        }
+      },
+      "exec-train-gru-component": {
+        "container": {
+          "args": [
+            "--executor_input",
+            "{{$}}",
+            "--function_to_execute",
+            "train_gru_component"
+          ],
+          "command": [
+            "sh",
+            "-c",
+            "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location 'kfp==2.15.2' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"$0\" \"$@\"\n",
+            "sh",
+            "-ec",
+            "program_path=$(mktemp -d)\n\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\n_KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+            "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import *\n\ndef train_gru_component(\n    model: dsl.Output[dsl.Model],\n    metrics: dsl.OutputPath(str),\n    run_id: dsl.OutputPath(str),\n    training_data: dsl.Input[dsl.Dataset] = None,\n    config_hash: str = \"\",\n    mlflow_tracking_uri: str = \"http://mlflow:5000\",\n    mlflow_s3_endpoint: str = \"http://minio:9000\",\n    gateway_url: str = \"http://fastapi-app:8000\",\n    hidden_size: int = 64,\n    num_layers: int = 2,\n    dropout: float = 0.2,\n    learning_rate: float = 0.001,\n    batch_size: int = 32,\n    num_epochs: int = 50,\n    early_stopping_patience: int = 10,\n    window_size: int = 12,\n):\n    \"\"\"\n    Train GRU (Gated Recurrent Unit) model for time-series forecasting.\n\n    Container: train-container:latest with MODEL_TYPE=GRU env variable.\n    \"\"\"\n    pass\n\n"
+          ],
+          "image": "train-container:latest"
+        }
+      },
+      "exec-train-lstm-component": {
+        "container": {
+          "args": [
+            "--executor_input",
+            "{{$}}",
+            "--function_to_execute",
+            "train_lstm_component"
+          ],
+          "command": [
+            "sh",
+            "-c",
+            "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location 'kfp==2.15.2' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"$0\" \"$@\"\n",
+            "sh",
+            "-ec",
+            "program_path=$(mktemp -d)\n\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\n_KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+            "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import *\n\ndef train_lstm_component(\n    model: dsl.Output[dsl.Model],\n    metrics: dsl.OutputPath(str),\n    run_id: dsl.OutputPath(str),\n    training_data: dsl.Input[dsl.Dataset] = None,\n    config_hash: str = \"\",\n    mlflow_tracking_uri: str = \"http://mlflow:5000\",\n    mlflow_s3_endpoint: str = \"http://minio:9000\",\n    gateway_url: str = \"http://fastapi-app:8000\",\n    hidden_size: int = 64,\n    num_layers: int = 2,\n    dropout: float = 0.2,\n    learning_rate: float = 0.001,\n    batch_size: int = 32,\n    num_epochs: int = 50,\n    early_stopping_patience: int = 10,\n    window_size: int = 12,\n):\n    \"\"\"\n    Train LSTM (Long Short-Term Memory) model for time-series forecasting.\n\n    Container: train-container:latest with MODEL_TYPE=LSTM env variable.\n    \"\"\"\n    pass\n\n"
+          ],
+          "image": "train-container:latest"
+        }
+      },
+      "exec-train-prophet-component": {
+        "container": {
+          "args": [
+            "--executor_input",
+            "{{$}}",
+            "--function_to_execute",
+            "train_prophet_component"
+          ],
+          "command": [
+            "sh",
+            "-c",
+            "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location 'kfp==2.15.2' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"$0\" \"$@\"\n",
+            "sh",
+            "-ec",
+            "program_path=$(mktemp -d)\n\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\n_KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+            "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import *\n\ndef train_prophet_component(\n    model: dsl.Output[dsl.Model],\n    metrics: dsl.OutputPath(str),\n    run_id: dsl.OutputPath(str),\n    training_data: dsl.Input[dsl.Dataset] = None,\n    config_hash: str = \"\",\n    mlflow_tracking_uri: str = \"http://mlflow:5000\",\n    mlflow_s3_endpoint: str = \"http://minio:9000\",\n    gateway_url: str = \"http://fastapi-app:8000\",\n    seasonality_mode: str = \"multiplicative\",\n    changepoint_prior_scale: float = 0.05,\n    seasonality_prior_scale: float = 10.0,\n    holidays_prior_scale: float = 10.0,\n    yearly_seasonality: bool = True,\n    weekly_seasonality: bool = True,\n    daily_seasonality: bool = False,\n):\n    \"\"\"\n    Train Prophet model for time-series forecasting.\n\n    Container: nonml-container:latest with MODEL_TYPE=PROPHET env variable.\n    \"\"\"\n    pass\n\n"
+          ],
+          "image": "nonml-container:latest"
+        }
+      }
+    }
+  },
+  "pipelineInfo": {
+    "description": "End-to-end FLTS pipeline in KFP v2 (preprocess \u2192 train \u2192 eval \u2192 inference)",
+    "name": "flts-time-series-pipeline"
+  },
+  "root": {
+    "dag": {
+      "tasks": {
+        "eval-component": {
+          "cachingOptions": {
+            "enableCache": true
+          },
+          "componentRef": {
+            "name": "comp-eval-component"
+          },
+          "dependentTasks": [
+            "preprocess-component",
+            "train-gru-component",
+            "train-lstm-component",
+            "train-prophet-component"
+          ],
+          "inputs": {
+            "artifacts": {
+              "gru_model": {
+                "taskOutputArtifact": {
+                  "outputArtifactKey": "model",
+                  "producerTask": "train-gru-component"
+                }
+              },
+              "lstm_model": {
+                "taskOutputArtifact": {
+                  "outputArtifactKey": "model",
+                  "producerTask": "train-lstm-component"
+                }
+              },
+              "prophet_model": {
+                "taskOutputArtifact": {
+                  "outputArtifactKey": "model",
+                  "producerTask": "train-prophet-component"
+                }
+              }
+            },
+            "parameters": {
+              "config_hash": {
+                "taskOutputParameter": {
+                  "outputParameterKey": "config_hash",
+                  "producerTask": "preprocess-component"
+                }
+              },
+              "gateway_url": {
+                "componentInputParameter": "gateway_url"
+              },
+              "identifier": {
+                "componentInputParameter": "identifier"
+              },
+              "mlflow_tracking_uri": {
+                "componentInputParameter": "mlflow_tracking_uri"
+              }
+            }
+          },
+          "taskInfo": {
+            "name": "Evaluate & Promote Best Model"
+          }
+        },
+        "inference-component": {
+          "cachingOptions": {
+            "enableCache": true
+          },
+          "componentRef": {
+            "name": "comp-inference-component"
+          },
+          "dependentTasks": [
+            "eval-component",
+            "preprocess-component"
+          ],
+          "inputs": {
+            "artifacts": {
+              "inference_data": {
+                "taskOutputArtifact": {
+                  "outputArtifactKey": "inference_data",
+                  "producerTask": "preprocess-component"
+                }
+              },
+              "promoted_model": {
+                "taskOutputArtifact": {
+                  "outputArtifactKey": "promotion_pointer",
+                  "producerTask": "eval-component"
+                }
+              }
+            },
+            "parameters": {
+              "gateway_url": {
+                "componentInputParameter": "gateway_url"
+              },
+              "identifier": {
+                "componentInputParameter": "identifier"
+              },
+              "mlflow_tracking_uri": {
+                "componentInputParameter": "mlflow_tracking_uri"
+              }
+            }
+          },
+          "taskInfo": {
+            "name": "Run Inference"
+          }
+        },
+        "preprocess-component": {
+          "cachingOptions": {
+            "enableCache": true
+          },
+          "componentRef": {
+            "name": "comp-preprocess-component"
+          },
+          "inputs": {
+            "parameters": {
+              "dataset_name": {
+                "componentInputParameter": "dataset_name"
+              },
+              "gateway_url": {
+                "componentInputParameter": "gateway_url"
+              },
+              "identifier": {
+                "componentInputParameter": "identifier"
+              },
+              "sample_test_rows": {
+                "componentInputParameter": "sample_test_rows"
+              },
+              "sample_train_rows": {
+                "componentInputParameter": "sample_train_rows"
+              }
+            }
+          },
+          "taskInfo": {
+            "name": "Preprocess Data"
+          }
+        },
+        "train-gru-component": {
+          "cachingOptions": {
+            "enableCache": true
+          },
+          "componentRef": {
+            "name": "comp-train-gru-component"
+          },
+          "dependentTasks": [
+            "preprocess-component"
+          ],
+          "inputs": {
+            "artifacts": {
+              "training_data": {
+                "taskOutputArtifact": {
+                  "outputArtifactKey": "training_data",
+                  "producerTask": "preprocess-component"
+                }
+              }
+            },
+            "parameters": {
+              "batch_size": {
+                "componentInputParameter": "batch_size"
+              },
+              "config_hash": {
+                "taskOutputParameter": {
+                  "outputParameterKey": "config_hash",
+                  "producerTask": "preprocess-component"
+                }
+              },
+              "dropout": {
+                "componentInputParameter": "dropout"
+              },
+              "gateway_url": {
+                "componentInputParameter": "gateway_url"
+              },
+              "hidden_size": {
+                "componentInputParameter": "hidden_size"
+              },
+              "learning_rate": {
+                "componentInputParameter": "learning_rate"
+              },
+              "mlflow_tracking_uri": {
+                "componentInputParameter": "mlflow_tracking_uri"
+              },
+              "num_epochs": {
+                "componentInputParameter": "num_epochs"
+              },
+              "num_layers": {
+                "componentInputParameter": "num_layers"
+              }
+            }
+          },
+          "taskInfo": {
+            "name": "Train GRU Model"
+          }
+        },
+        "train-lstm-component": {
+          "cachingOptions": {
+            "enableCache": true
+          },
+          "componentRef": {
+            "name": "comp-train-lstm-component"
+          },
+          "dependentTasks": [
+            "preprocess-component"
+          ],
+          "inputs": {
+            "artifacts": {
+              "training_data": {
+                "taskOutputArtifact": {
+                  "outputArtifactKey": "training_data",
+                  "producerTask": "preprocess-component"
+                }
+              }
+            },
+            "parameters": {
+              "batch_size": {
+                "componentInputParameter": "batch_size"
+              },
+              "config_hash": {
+                "taskOutputParameter": {
+                  "outputParameterKey": "config_hash",
+                  "producerTask": "preprocess-component"
+                }
+              },
+              "dropout": {
+                "componentInputParameter": "dropout"
+              },
+              "gateway_url": {
+                "componentInputParameter": "gateway_url"
+              },
+              "hidden_size": {
+                "componentInputParameter": "hidden_size"
+              },
+              "learning_rate": {
+                "componentInputParameter": "learning_rate"
+              },
+              "mlflow_tracking_uri": {
+                "componentInputParameter": "mlflow_tracking_uri"
+              },
+              "num_epochs": {
+                "componentInputParameter": "num_epochs"
+              },
+              "num_layers": {
+                "componentInputParameter": "num_layers"
+              }
+            }
+          },
+          "taskInfo": {
+            "name": "Train LSTM Model"
+          }
+        },
+        "train-prophet-component": {
+          "cachingOptions": {
+            "enableCache": true
+          },
+          "componentRef": {
+            "name": "comp-train-prophet-component"
+          },
+          "dependentTasks": [
+            "preprocess-component"
+          ],
+          "inputs": {
+            "artifacts": {
+              "training_data": {
+                "taskOutputArtifact": {
+                  "outputArtifactKey": "training_data",
+                  "producerTask": "preprocess-component"
+                }
+              }
+            },
+            "parameters": {
+              "config_hash": {
+                "taskOutputParameter": {
+                  "outputParameterKey": "config_hash",
+                  "producerTask": "preprocess-component"
+                }
+              },
+              "gateway_url": {
+                "componentInputParameter": "gateway_url"
+              },
+              "mlflow_tracking_uri": {
+                "componentInputParameter": "mlflow_tracking_uri"
+              }
+            }
+          },
+          "taskInfo": {
+            "name": "Train Prophet Model"
+          }
+        }
+      }
+    },
+    "inputDefinitions": {
+      "parameters": {
+        "batch_size": {
+          "defaultValue": 32.0,
+          "description": "Training batch size",
+          "isOptional": true,
+          "parameterType": "NUMBER_INTEGER"
+        },
+        "dataset_name": {
+          "defaultValue": "PobleSec",
+          "description": "Name of dataset to process (e.g., 'PobleSec')",
+          "isOptional": true,
+          "parameterType": "STRING"
+        },
+        "dropout": {
+          "defaultValue": 0.2,
+          "description": "Dropout rate for neural models",
+          "isOptional": true,
+          "parameterType": "NUMBER_DOUBLE"
+        },
+        "gateway_url": {
+          "defaultValue": "http://fastapi-app:8000",
+          "description": "FastAPI gateway URL for MinIO",
+          "isOptional": true,
+          "parameterType": "STRING"
+        },
+        "hidden_size": {
+          "defaultValue": 64.0,
+          "description": "Hidden layer size for neural models",
+          "isOptional": true,
+          "parameterType": "NUMBER_INTEGER"
+        },
+        "identifier": {
+          "defaultValue": "default-run",
+          "description": "Unique run identifier for tracking",
+          "isOptional": true,
+          "parameterType": "STRING"
+        },
+        "learning_rate": {
+          "defaultValue": 0.001,
+          "description": "Learning rate for training",
+          "isOptional": true,
+          "parameterType": "NUMBER_DOUBLE"
+        },
+        "mlflow_tracking_uri": {
+          "defaultValue": "http://mlflow:5000",
+          "description": "MLflow tracking server URL",
+          "isOptional": true,
+          "parameterType": "STRING"
+        },
+        "num_epochs": {
+          "defaultValue": 50.0,
+          "description": "Number of training epochs",
+          "isOptional": true,
+          "parameterType": "NUMBER_INTEGER"
+        },
+        "num_layers": {
+          "defaultValue": 2.0,
+          "description": "Number of layers for neural models",
+          "isOptional": true,
+          "parameterType": "NUMBER_INTEGER"
+        },
+        "sample_test_rows": {
+          "defaultValue": 0.0,
+          "description": "Number of test rows to sample (0=all)",
+          "isOptional": true,
+          "parameterType": "NUMBER_INTEGER"
+        },
+        "sample_train_rows": {
+          "defaultValue": 0.0,
+          "description": "Number of training rows to sample (0=all)",
+          "isOptional": true,
+          "parameterType": "NUMBER_INTEGER"
+        }
+      }
+    }
+  },
+  "schemaVersion": "2.1.0",
+  "sdkVersion": "kfp-2.15.2"
+}

@@ -1,3 +1,8 @@
+OLDOLDOLD
+
+
+
+
 # FLTS Time Series Pipeline
 
 End-to-end, containerized time-series training and inference platform using a claim‑check pattern (Kafka + MinIO) and MLflow for experiment tracking / artifact registry.

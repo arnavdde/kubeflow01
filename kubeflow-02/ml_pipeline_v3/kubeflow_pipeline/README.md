@@ -1,466 +1,521 @@
 # FLTS Kubeflow Pipeline (KFP v2)
 
-**Complete time-series forecasting pipeline for Kubeflow Pipelines v2**
+**Pure Python time-series forecasting pipeline using Kubeflow Pipelines SDK v2**
 
-This directory contains the full KFP v2 pipeline definition for the FLTS (Forecasting Load Time Series) project. The pipeline orchestrates preprocessing, multi-model training, evaluation, and inference using containerized components.
+Complete runbook for local development, compilation, and testing. **Step 9 (deployment to Kubeflow cluster) is intentionally NOT covered here.**
 
 ---
 
 ## 📋 Table of Contents
 
-- [Architecture](#architecture)
-- [Components](#components)
+- [What This Is](#what-this-is)
+- [What This Is NOT](#what-this-is-not)
 - [Prerequisites](#prerequisites)
 - [Quick Start](#quick-start)
+- [Pipeline Structure](#pipeline-structure)
+- [Components](#components)
 - [Pipeline Parameters](#pipeline-parameters)
-- [Compilation](#compilation)
-- [Deployment](#deployment)
-- [Execution](#execution)
-- [Monitoring](#monitoring)
+- [Testing](#testing)
+- [Development Workflow](#development-workflow)
 - [Troubleshooting](#troubleshooting)
-- [Development](#development)
+- [KFP v1 → v2 Migration](#kfp-v1--v2-migration)
 
 ---
 
-## 🏗️ Architecture
+## ✅ What This Is
 
-### Pipeline Flow
+A complete KFP v2 pipeline definition for time-series forecasting with:
+
+- **Pure Python components** using `@dsl.component` decorator
+- **No YAML dependencies** - all component definitions in Python code
+- **Type-safe interfaces** using `dsl.Input`, `dsl.Output`, `dsl.Dataset`, `dsl.Model`
+- **Local compilation** to KFP v2 IR JSON spec
+- **Unit tests** to validate pipeline structure
+- **Docker-based component execution** (images: `flts-preprocess:latest`, `train-container:latest`, etc.)
+
+**Pipeline DAG:**
 
 ```
-┌─────────────────┐
-│   Preprocess    │  Load CSV, transform, split
-└────────┬────────┘
-         │
-         ├──────────────────┬──────────────────┐
-         ▼                  ▼                  ▼
-    ┌─────────┐       ┌──────────┐      ┌──────────┐
-    │   GRU   │       │   LSTM   │      │  Prophet │  Train 3 models
-    │ Training│       │ Training │      │ Training │  (parallel)
-    └────┬────┘       └─────┬────┘      └─────┬────┘
-         │                  │                  │
-         └──────────────────┼──────────────────┘
-                            ▼
-                    ┌───────────────┐
-                    │  Evaluation   │  Select best model
-                    └───────┬───────┘
-                            │
-                            ▼
-                    ┌───────────────┐
-                    │  Inference    │  Generate predictions
-                    └───────────────┘
+┌──────────────┐
+│  Preprocess  │  Load CSV, transform, split
+└──────┬───────┘
+       │
+       ├─────────────┬─────────────┐
+       ▼             ▼             ▼
+   ┌──────┐     ┌───────┐     ┌─────────┐
+   │ GRU  │     │ LSTM  │     │ Prophet │  Train 3 models
+   └──┬───┘     └───┬───┘     └────┬────┘  (parallel)
+      │             │              │
+      └─────────────┼──────────────┘
+                    ▼
+             ┌─────────────┐
+             │ Evaluation  │  Select best model
+             └──────┬──────┘
+                    ▼
+             ┌────────────┐
+             │ Inference  │  Generate predictions
+             └────────────┘
 ```
-
-### Artifact Flow
-
-| Component | Inputs | Outputs |
-|-----------|--------|---------|
-| **Preprocess** | CSV files from MinIO | `training_data` (Dataset)<br>`inference_data` (Dataset)<br>`config_hash` (String)<br>`config_json` (String) |
-| **Train GRU** | `training_data` (Dataset) | `model` (Model)<br>`metrics` (Artifact)<br>`run_id` (String) |
-| **Train LSTM** | `training_data` (Dataset) | `model` (Model)<br>`metrics` (Artifact)<br>`run_id` (String) |
-| **Train Prophet** | `training_data` (Dataset) | `model` (Model)<br>`metrics` (Artifact)<br>`run_id` (String) |
-| **Eval** | `gru_model`, `lstm_model`, `prophet_model` (Models) | `promotion_pointer` (Artifact)<br>`eval_metadata` (Artifact) |
-| **Inference** | `inference_data` (Dataset)<br>`promoted_model` (Model) | `inference_results` (Artifact)<br>`inference_metadata` (Artifact) |
 
 ---
 
-## 🧩 Components
+## ❌ What This Is NOT
 
-### 1. Preprocess (`components/preprocess/`)
-- **Image**: `flts-preprocess:latest`
-- **Purpose**: Load raw CSV, apply transformations (scaling, feature engineering), split into train/test
-- **Key Features**:
-  - Configurable sampling (head/tail/random)
-  - NaN handling (KNN imputation)
-  - Outlier clipping (IQR/percentile)
-  - Time feature extraction (hour, day, month)
-  - Multiple scalers (MinMax, Standard, Robust)
+This README does **NOT** cover:
 
-### 2. Train GRU (`components/train_gru/`)
-- **Image**: `train-container:latest`
-- **Purpose**: Train Gated Recurrent Unit (GRU) model
-- **Key Features**:
-  - Configurable architecture (hidden size, layers, dropout)
-  - Early stopping with patience
-  - MLflow integration for tracking
-  - CUDA-enabled training
+- ❌ **Step 9**: Uploading pipeline to Kubeflow Pipelines UI
+- ❌ **Step 9**: Submitting runs to KFP cluster
+- ❌ **Step 9**: Kubernetes deployment
+- ❌ **Step 9**: `kfp.Client()` usage for pipeline submission
+- ❌ **Step 9**: Port-forwarding to KFP API server
 
-### 3. Train LSTM (`components/train_lstm/`)
-- **Image**: `train-container:latest`
-- **Purpose**: Train Long Short-Term Memory (LSTM) model
-- **Key Features**: Same as GRU with LSTM architecture
-
-### 4. Train Prophet (`components/train_prophet/`)
-- **Image**: `train-container:latest`
-- **Purpose**: Train Facebook Prophet statistical model
-- **Key Features**:
-  - Seasonality modeling (yearly, weekly, daily)
-  - Changepoint detection
-  - Holiday effects
-
-### 5. Eval (`components/eval/`)
-- **Image**: `eval-container:latest`
-- **Purpose**: Compare all models, select best performer
-- **Key Features**:
-  - Weighted composite score (RMSE, MAE, MSE)
-  - Model promotion with canonical pointer
-  - Detailed evaluation metadata
-
-### 6. Inference (`components/inference/`)
-- **Image**: `inference-container:latest`
-- **Purpose**: Run predictions using promoted model
-- **Key Features**:
-  - Configurable inference length
-  - Microbatching support
-  - JSONL output format
+**Why?** This work stops at Step 8 (pipeline definition and compilation). Step 9 (deployment and execution) is a separate concern requiring cluster access.
 
 ---
 
 ## ⚙️ Prerequisites
 
-### Infrastructure Requirements
-1. **Kubeflow Pipelines v2** (v2.0.0+)
-   - Installed on Kubernetes cluster
-   - KFP SDK v2 installed locally (`pip install kfp>=2.0.0`)
+### 1. Python Environment
 
-2. **MinIO** (S3-compatible storage)
-   - Running at `http://minio:9000` (or custom endpoint)
-   - Buckets: `dataset`, `processed-data`, `model-promotion`, `inference-logs`
-
-3. **MLflow** (experiment tracking)
-   - Running at `http://mlflow:5000` (or custom endpoint)
-   - Configured with MinIO backend
-
-4. **FastAPI Gateway** (optional)
-   - MinIO REST API at `http://fastapi-app:8000`
-
-### Docker Images
-All 6 component images must be built and accessible to Kubernetes:
+Requires Python 3.11+ with KFP v2 SDK:
 
 ```bash
-# Build all images
-docker-compose -f docker-compose.kfp.yaml build
+# Create virtual environment (recommended)
+python3 -m venv .venv
+source .venv/bin/activate  # macOS/Linux
+# .venv\Scripts\activate   # Windows
 
-# Push to registry (if using remote cluster)
-docker tag flts-preprocess:latest <your-registry>/flts-preprocess:latest
-docker push <your-registry>/flts-preprocess:latest
-# ... repeat for other images
+# Install KFP v2
+pip install "kfp>=2.0.0,<3.0.0"
 ```
 
-Required images:
-- `flts-preprocess:latest`
-- `train-container:latest`
-- `eval-container:latest`
-- `inference-container:latest`
-
-### Python Environment
+**Verify installation:**
 ```bash
-pip install kfp>=2.0.0
+python -c "import kfp; print('KFP version:', kfp.__version__)"
+# Expected: KFP version: 2.15.2 (or similar 2.x)
+```
+
+### 2. Docker Images
+
+All component images must be built (for eventual execution, not for compilation):
+
+```bash
+cd /Users/arnavde/Python/AI/kubeflow-02/ml_pipeline_v3
+
+# Build all images
+docker-compose -f docker-compose.yaml build
+
+# Or build individually
+docker build -t flts-preprocess:latest components/preprocess/
+docker build -t train-container:latest components/train_gru/
+docker build -t eval-container:latest components/eval/
+docker build -t inference-container:latest components/inference/
+```
+
+**Note:** Compilation does NOT require running containers - it only needs image names to be specified in component definitions.
+
+### 3. Directory Structure
+
+Ensure this structure exists:
+
+```
+kubeflow_pipeline/
+├── README.md (this file)
+├── components_v2.py          # Component definitions
+├── pipeline_v2.py            # Pipeline DAG
+├── compile_pipeline_v2.py    # Compilation script
+├── CHANGES_KFP_VERSION.md    # Migration notes
+├── tests/
+│   ├── test_kfp_v2_pipeline.py  # Unit tests
+│   └── run_all_tests.sh         # Test harness
+├── _deprecated/              # Old KFP v1 artifacts
+│   ├── README.md
+│   ├── compile_kfp_v1.py
+│   └── compile_pipeline_v1.py
+└── artifacts/
+    └── flts_pipeline_v2.json  # Compiled output (generated)
 ```
 
 ---
 
 ## 🚀 Quick Start
 
-### 1. Compile the Pipeline
+### Step 1: Verify Environment
 
 ```bash
-cd kubeflow_pipeline
-python compile_pipeline.py
+cd /Users/arnavde/Python/AI/kubeflow-02/ml_pipeline_v3
+
+# Activate virtual environment (if using)
+source /Users/arnavde/Python/AI/.venv/bin/activate
+
+# Check KFP version
+python -c "import kfp; print('KFP version:', kfp.__version__)"
+# Expected: 2.15.2
 ```
 
-Output: `pipeline.job.yaml`
+### Step 2: Compile Pipeline
 
-### 2. Upload to KFP UI
+```bash
+python kubeflow_pipeline/compile_pipeline_v2.py
+```
 
-1. Navigate to Kubeflow Pipelines UI
-2. Click **Pipelines** → **Upload Pipeline**
-3. Select `pipeline.job.yaml`
-4. Name: "FLTS Time Series Forecasting"
-5. Click **Create**
+**Expected output:**
+```
+======================================================================
+KFP v2 Pipeline Compilation
+======================================================================
 
-### 3. Create a Run
+Pipeline: flts_pipeline
+Output:   artifacts/flts_pipeline_v2.json
 
-1. Click **Create Run** from pipeline page
-2. Select experiment (or create new)
-3. Configure parameters (see [Pipeline Parameters](#pipeline-parameters))
-4. Click **Start**
+✓ Compilation successful
 
-### 4. Monitor Execution
+Compiled pipeline spec:
+  Path: artifacts/flts_pipeline_v2.json
+  Size: 40,500 bytes
+```
 
-- View run progress in KFP dashboard
-- Check component logs for detailed output
-- Inspect artifacts in MinIO buckets
-- View metrics in MLflow UI
+**Artifacts created:**
+- `artifacts/flts_pipeline_v2.json` - KFP v2 IR spec (40,500 bytes)
+
+### Step 3: Run Tests
+
+```bash
+bash kubeflow_pipeline/tests/run_all_tests.sh
+```
+
+**Expected output:**
+```
+=======================================================================
+✓ All Step 8 Tests PASSED
+=======================================================================
+
+Step 8 (Pipeline Definition) is COMPLETE.
+Step 9 (Deployment) has NOT been started.
+```
+
+---
+
+## 🏗️ Pipeline Structure
+
+### Component Files
+
+**`components_v2.py`** (225 lines):
+- Single source of truth for all 6 components
+- Uses `@dsl.component(base_image="...")` decorator
+- Type-safe I/O: `dsl.Output[dsl.Dataset]`, `dsl.Input[dsl.Model]`, etc.
+
+**Example component:**
+```python
+@dsl.component(base_image="flts-preprocess:latest")
+def preprocess_component(
+    # Outputs first (Python syntax requirement)
+    training_data: dsl.Output[dsl.Dataset],
+    inference_data: dsl.Output[dsl.Dataset],
+    config_hash: dsl.OutputPath(str),
+    config_json: dsl.OutputPath(str),
+    
+    # Required inputs with None defaults (allows KFP to inject)
+    dataset_name: str = None,
+    identifier: str = None,
+    
+    # Optional parameters with defaults
+    sample_train_rows: int = 0,
+    sample_test_rows: int = 0,
+    # ... more params
+):
+    """Preprocesses raw CSV data for training/inference."""
+    pass  # Container handles actual execution
+```
+
+**`pipeline_v2.py`** (169 lines):
+- Defines the DAG using `@dsl.pipeline` decorator
+- Wires components together using `.outputs`
+- Exposes 12 key parameters for runtime configuration
+
+**Example pipeline:**
+```python
+@dsl.pipeline(
+    name="flts-time-series-pipeline",
+    description="End-to-end time-series forecasting with KFP v2"
+)
+def flts_pipeline(
+    dataset_name: str = "PobleSec",
+    identifier: str = "flts-run-001",
+    # ... 10 more params
+):
+    # Step 1: Preprocess
+    preprocess_task = preprocess_component(
+        dataset_name=dataset_name,
+        identifier=identifier,
+        # ... all params
+    )
+    
+    # Step 2: Train models (parallel)
+    gru_task = train_gru_component(
+        training_data=preprocess_task.outputs['training_data'],
+        # ...
+    )
+    lstm_task = train_lstm_component(...)
+    prophet_task = train_prophet_component(...)
+    
+    # Step 3: Evaluate
+    eval_task = eval_component(
+        gru_model=gru_task.outputs['model'],
+        lstm_model=lstm_task.outputs['model'],
+        prophet_model=prophet_task.outputs['model'],
+        # ...
+    )
+    
+    # Step 4: Inference
+    inference_task = inference_component(
+        inference_data=preprocess_task.outputs['inference_data'],
+        # ...
+    )
+```
+
+**`compile_pipeline_v2.py`** (103 lines):
+- Dedicated compilation script with CLI interface
+- Uses `kfp.compiler.Compiler().compile()`
+- Outputs JSON IR spec to `artifacts/flts_pipeline_v2.json`
+
+---
+
+## 🧩 Components
+
+### 1. Preprocess Component
+
+- **Image**: `flts-preprocess:latest`
+- **Purpose**: Load CSV, apply transformations, split train/test
+- **Inputs**: None (reads from MinIO via env vars)
+- **Outputs**:
+  - `training_data` (Dataset) - Processed training data
+  - `inference_data` (Dataset) - Test data for inference
+  - `config_hash` (String) - Config hash for reproducibility
+  - `config_json` (String) - Full config JSON
+
+**Key Parameters:**
+- `dataset_name` (str): CSV filename (e.g., "PobleSec")
+- `sample_train_rows` (int): Row limit (0=all)
+- `sample_strategy` (str): "head", "tail", or "random"
+- `handle_nans` (bool): Enable NaN imputation
+- `scaler` (str): "MinMaxScaler", "StandardScaler", "RobustScaler"
+
+### 2. Train GRU Component
+
+- **Image**: `train-container:latest`
+- **Purpose**: Train Gated Recurrent Unit model
+- **Inputs**: `training_data` (Dataset)
+- **Outputs**:
+  - `model` (Model) - Trained GRU model
+  - `metrics` (Artifact) - Training metrics
+  - `run_id` (String) - MLflow run ID
+
+**Key Parameters:**
+- `hidden_size` (int): Hidden layer size
+- `num_layers` (int): RNN depth
+- `learning_rate` (float): Adam LR
+- `num_epochs` (int): Max training epochs
+
+### 3. Train LSTM Component
+
+- **Image**: `train-container:latest`
+- **Purpose**: Train Long Short-Term Memory model
+- **Inputs/Outputs**: Same as GRU
+- **Difference**: Uses LSTM architecture (via `MODEL_TYPE=lstm` env var)
+
+### 4. Train Prophet Component
+
+- **Image**: `nonml-container:latest`
+- **Purpose**: Train Facebook Prophet statistical model
+- **Inputs**: `training_data` (Dataset)
+- **Outputs**: Same as GRU/LSTM
+- **Key Parameters**:
+  - `seasonality_mode` (str): "additive" or "multiplicative"
+  - `yearly_seasonality` (bool): Enable yearly patterns
+
+### 5. Evaluation Component
+
+- **Image**: `eval-container:latest`
+- **Purpose**: Compare all models, select best performer
+- **Inputs**:
+  - `gru_model`, `lstm_model`, `prophet_model` (Models)
+  - `gru_metrics`, `lstm_metrics`, `prophet_metrics` (Artifacts)
+- **Outputs**:
+  - `promotion_pointer` (Artifact) - Best model pointer
+  - `eval_metadata` (Artifact) - Evaluation results
+
+**Selection Criteria:**
+- Weighted composite score: `0.5*RMSE + 0.3*MAE + 0.2*MSE`
+- Lowest score wins
+
+### 6. Inference Component
+
+- **Image**: `inference-container:latest`
+- **Purpose**: Generate predictions using promoted model
+- **Inputs**:
+  - `inference_data` (Dataset) - Test data
+  - Promoted model (selected by eval)
+- **Outputs**:
+  - `inference_results` (Artifact) - JSONL predictions
+  - `inference_metadata` (Artifact) - Inference stats
+
+**Key Parameters:**
+- `inference_length` (int): Forecast horizon
+- `sample_idx` (int): Which test sample to use
 
 ---
 
 ## 📊 Pipeline Parameters
 
-### Preprocessing Parameters
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `dataset_name` | string | `"PobleSec"` | Dataset to process (CSV filename without extension) |
-| `identifier` | string | `"flts-run-001"` | Unique run identifier for lineage tracking |
-| `sample_train_rows` | int | `0` | Rows to sample for training (0=all) |
-| `sample_test_rows` | int | `0` | Rows to sample for testing (0=all) |
-| `sample_strategy` | string | `"head"` | Sampling method: `head`, `tail`, `random` |
-| `sample_seed` | int | `42` | Random seed for reproducibility |
-| `handle_nans` | bool | `true` | Enable NaN imputation |
-| `nans_threshold` | float | `0.33` | Drop columns with >33% NaNs |
-| `nans_knn` | int | `2` | KNN neighbors for imputation |
-| `clip_enable` | bool | `false` | Enable outlier clipping |
-| `clip_method` | string | `"iqr"` | Clipping method: `iqr`, `percentile` |
-| `time_features_enable` | bool | `true` | Extract time features (hour, day, etc.) |
-| `lags_enable` | bool | `false` | Add lagged features |
-| `scaler` | string | `"MinMaxScaler"` | Scaler: `MinMaxScaler`, `StandardScaler`, `RobustScaler` |
-
-### Training Parameters (shared across GRU/LSTM)
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `hidden_size` | int | `64` | Hidden layer size |
-| `num_layers` | int | `2` | Number of RNN layers |
-| `dropout` | float | `0.2` | Dropout rate |
-| `learning_rate` | float | `0.001` | Adam optimizer learning rate |
-| `batch_size` | int | `32` | Training batch size |
-| `num_epochs` | int | `50` | Maximum training epochs |
-| `early_stopping_patience` | int | `10` | Epochs to wait before stopping |
-| `window_size` | int | `12` | Time series window size |
-
-### Prophet Parameters
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `seasonality_mode` | string | `"multiplicative"` | Seasonality: `additive`, `multiplicative` |
-| `changepoint_prior_scale` | float | `0.05` | Changepoint flexibility |
-| `yearly_seasonality` | bool | `true` | Enable yearly patterns |
-| `weekly_seasonality` | bool | `true` | Enable weekly patterns |
-| `daily_seasonality` | bool | `false` | Enable daily patterns |
-
-### Evaluation Parameters
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `rmse_weight` | float | `0.5` | RMSE weight in composite score |
-| `mae_weight` | float | `0.3` | MAE weight in composite score |
-| `mse_weight` | float | `0.2` | MSE weight in composite score |
-
-### Inference Parameters
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `inference_length` | int | `1` | Number of future steps to predict |
-| `sample_idx` | int | `0` | Which sample to use for inference |
-| `enable_microbatch` | string | `"false"` | Enable microbatching: `"true"`, `"false"` |
-| `inference_batch_size` | int | `32` | Inference batch size |
-
-### Infrastructure Parameters
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `gateway_url` | string | `"http://fastapi-app:8000"` | FastAPI MinIO gateway URL |
-| `mlflow_tracking_uri` | string | `"http://mlflow:5000"` | MLflow tracking server |
-| `mlflow_s3_endpoint` | string | `"http://minio:9000"` | MLflow S3 endpoint (MinIO) |
-| `input_bucket` | string | `"dataset"` | MinIO bucket for raw datasets |
-| `output_bucket` | string | `"processed-data"` | MinIO bucket for preprocessed data |
-| `promotion_bucket` | string | `"model-promotion"` | MinIO bucket for promotion pointers |
-| `inference_log_bucket` | string | `"inference-logs"` | MinIO bucket for inference results |
-
----
-
-## 🔧 Compilation
-
-### Standard Compilation
-
-```bash
-python compile_pipeline.py
-```
-
-Output: `pipeline.job.yaml` in current directory
-
-### Custom Options
-
-```bash
-# Custom output location
-python compile_pipeline.py -o /path/to/output.yaml
-
-# Specify components directory
-python compile_pipeline.py -c ../custom_components
-
-# Lightweight version (reduced parameters for testing)
-python compile_pipeline.py --lightweight
-```
-
-### Verification
-
-Check compilation success:
-```bash
-# Verify output file exists
-ls -lh pipeline.job.yaml
-
-# Inspect YAML structure
-head -n 50 pipeline.job.yaml
-
-# Validate YAML syntax
-python -c "import yaml; yaml.safe_load(open('pipeline.job.yaml'))"
-```
-
----
-
-## 🌐 Deployment
-
-### Option 1: KFP UI (Recommended for Production)
-
-1. **Navigate to KFP UI**:
-   - Local: `http://localhost:8080` (port-forward if needed)
-   - Remote: `https://<your-kubeflow-domain>/pipeline`
-
-2. **Upload Pipeline**:
-   - Click **Pipelines** → **Upload Pipeline**
-   - Select `pipeline.job.yaml`
-   - Name: "FLTS Time Series Forecasting v2"
-   - Description: "End-to-end forecasting with GRU/LSTM/Prophet"
-   - Click **Create**
-
-3. **Verify Upload**:
-   - Pipeline appears in list
-   - Click to view DAG visualization
-
-### Option 2: KFP SDK (Programmatic)
+The pipeline exposes 12 parameters for runtime configuration:
 
 ```python
-import kfp
-
-client = kfp.Client(host='http://localhost:8080')
-
-# Upload pipeline
-pipeline_id = client.upload_pipeline(
-    pipeline_package_path='pipeline.job.yaml',
-    pipeline_name='FLTS Time Series Forecasting v2'
+flts_pipeline(
+    # Data parameters
+    dataset_name: str = "PobleSec",       # CSV filename
+    identifier: str = "flts-run-001",     # Run ID for tracking
+    
+    # Training parameters
+    hidden_size: int = 64,                # RNN hidden size
+    num_layers: int = 2,                  # RNN depth
+    dropout: float = 0.2,                 # Dropout rate
+    learning_rate: float = 0.001,         # Adam LR
+    batch_size: int = 32,                 # Batch size
+    num_epochs: int = 50,                 # Max epochs
+    
+    # Sampling parameters
+    sample_train_rows: int = 0,           # Train subset (0=all)
+    sample_test_rows: int = 0,            # Test subset (0=all)
+    
+    # Inference parameters
+    inference_length: int = 1,            # Forecast steps
+    sample_idx: int = 0,                  # Test sample index
 )
-
-print(f"Pipeline uploaded: {pipeline_id}")
 ```
 
-### Option 3: kubectl (Direct YAML)
-
-```bash
-# Apply pipeline as Kubernetes resource
-kubectl apply -f pipeline.job.yaml -n kubeflow
-```
+**To customize:** Modify parameters when creating pipeline run (Step 9, not covered here).
 
 ---
 
-## ▶️ Execution
+## 🧪 Testing
 
-### Option 1: KFP UI
+### Test Suite Structure
 
-1. Click **Create Run** from pipeline page
-2. **Run Details**:
-   - Name: `flts-run-pobleSec-2024`
-   - Experiment: Select or create new
-3. **Parameters** (customize as needed):
-   ```yaml
-   dataset_name: "PobleSec"
-   identifier: "pobleSec-run-001"
-   num_epochs: 50
-   hidden_size: 64
+**`test_kfp_v2_pipeline.py`** (132 lines):
+- 3 unit tests for Step 8 validation
+- Tests run automatically via test harness
+
+**Tests:**
+1. **Component Validation**: Verify all 6 components have `component_spec`
+2. **Pipeline Decoration**: Verify pipeline has `pipeline_spec`
+3. **Compilation Test**: Compile to tempfile, validate JSON structure
+
+**`run_all_tests.sh`** (64 lines):
+- Bash harness for complete validation
+- Runs: version check, compilation, artifact verification, unit tests, v1 reference check
+
+### Running Tests
+
+**Full test suite:**
+```bash
+bash kubeflow_pipeline/tests/run_all_tests.sh
+```
+
+**Individual tests:**
+```bash
+# Just unit tests
+python kubeflow_pipeline/tests/test_kfp_v2_pipeline.py
+
+# Just compilation
+python kubeflow_pipeline/compile_pipeline_v2.py
+
+# Just version check
+python -c "import kfp; print(kfp.__version__)"
+```
+
+**Expected results:**
+- All tests pass ✅
+- `artifacts/flts_pipeline_v2.json` created (40,500 bytes)
+- No KFP v1 references found
+
+---
+
+## 🛠️ Development Workflow
+
+### Modifying Components
+
+After changing component logic (e.g., adding parameter):
+
+1. **Update `components_v2.py`**:
+   ```python
+   @dsl.component(base_image="flts-preprocess:latest")
+   def preprocess_component(
+       # ... existing params
+       new_param: str = "default_value",  # Add new param
+   ):
+       pass
    ```
-4. Click **Start**
 
-### Option 2: KFP SDK
+2. **Update `pipeline_v2.py`** to pass the parameter:
+   ```python
+   preprocess_task = preprocess_component(
+       # ... existing args
+       new_param=new_param,  # Wire from pipeline params
+   )
+   ```
 
+3. **Recompile:**
+   ```bash
+   python kubeflow_pipeline/compile_pipeline_v2.py
+   ```
+
+4. **Test:**
+   ```bash
+   bash kubeflow_pipeline/tests/run_all_tests.sh
+   ```
+
+### Adding New Component
+
+1. **Add to `components_v2.py`:**
+   ```python
+   @dsl.component(base_image="my-new-component:latest")
+   def my_new_component(
+       output_data: dsl.Output[dsl.Artifact],
+       input_data: dsl.Input[dsl.Dataset] = None,
+   ):
+       pass
+   ```
+
+2. **Wire into `pipeline_v2.py`:**
+   ```python
+   my_task = my_new_component(
+       input_data=preprocess_task.outputs['training_data']
+   )
+   ```
+
+3. **Recompile and test** as above
+
+### Parameter Ordering (CRITICAL)
+
+Python requires outputs (no defaults) before optional params (with defaults):
+
+**✅ Correct:**
 ```python
-import kfp
-
-client = kfp.Client(host='http://localhost:8080')
-
-# Create experiment
-experiment = client.create_experiment('FLTS Production Runs')
-
-# Submit run
-run = client.run_pipeline(
-    experiment_id=experiment.id,
-    job_name='flts-run-pobleSec-001',
-    pipeline_id='<your-pipeline-id>',
-    params={
-        'dataset_name': 'PobleSec',
-        'identifier': 'pobleSec-run-001',
-        'num_epochs': 50,
-        'hidden_size': 64
-    }
-)
-
-print(f"Run submitted: {run.id}")
+def my_component(
+    output1: dsl.Output[dsl.Dataset],      # Output first
+    input_required: dsl.Input[dsl.Dataset] = None,  # Required input with None
+    param_optional: int = 42,              # Optional param with default
+):
 ```
 
-### Quick Test Run (Lightweight)
-
-For fast validation, use minimal parameters:
-
+**❌ Incorrect:**
 ```python
-params = {
-    'dataset_name': 'PobleSec',
-    'identifier': 'test-run-001',
-    'sample_train_rows': 1000,  # Use subset
-    'sample_test_rows': 100,
-    'num_epochs': 10,           # Fewer epochs
-    'early_stopping_patience': 3
-}
+def my_component(
+    param_optional: int = 42,              # Optional param BEFORE output
+    output1: dsl.Output[dsl.Dataset],      # Causes SyntaxError!
+):
 ```
-
----
-
-## 📈 Monitoring
-
-### KFP Dashboard
-
-- **Run Status**: View overall pipeline status (Running/Succeeded/Failed)
-- **Component Logs**: Click each component to view stdout/stderr
-- **Artifacts**: Download output artifacts (models, metrics, predictions)
-- **Execution Graph**: Visual DAG with component statuses
-
-### Component Logs
-
-**Via UI**:
-1. Click on component in run graph
-2. Select **Logs** tab
-3. View real-time output
-
-**Via kubectl**:
-```bash
-# List pods in run
-kubectl get pods -n kubeflow | grep flts-run
-
-# View logs
-kubectl logs <pod-name> -n kubeflow
-
-# Follow logs in real-time
-kubectl logs -f <pod-name> -n kubeflow
-```
-
-### MinIO Artifacts
-
-Check intermediate artifacts:
-```bash
-# List processed datasets
-mc ls minio/processed-data/
-
-# Download promotion pointer
-mc cp minio/model-promotion/promotion-pointer-<identifier>.json ./
-
-# View inference results
-mc cat minio/inference-logs/inference-results-<identifier>.jsonl | jq
-```
-
-### MLflow Experiments
-
-View training metrics:
-1. Navigate to MLflow UI: `http://localhost:5000`
-2. Select experiment: "FLTS Pipeline Runs"
-3. Compare model performance (RMSE, MAE, loss curves)
-4. Download model artifacts
 
 ---
 
@@ -468,204 +523,143 @@ View training metrics:
 
 ### Compilation Errors
 
-**Issue**: `FileNotFoundError: component.yaml not found`
-```bash
-# Solution: Verify components directory structure
-ls components/*/component.yaml
-
-# Expected:
-# components/preprocess/component.yaml
-# components/train_gru/component.yaml
-# ...
-```
-
 **Issue**: `ModuleNotFoundError: No module named 'kfp'`
 ```bash
-# Solution: Install KFP SDK
-pip install kfp>=2.0.0
+# Solution: Install KFP v2
+pip install "kfp>=2.0.0,<3.0.0"
 ```
 
-### Image Pull Errors
-
-**Issue**: `ErrImagePull` in component pods
+**Issue**: `ModuleNotFoundError: No module named 'kubeflow_pipeline'`
 ```bash
-# Solution 1: Verify images exist locally
-docker images | grep flts
-
-# Solution 2: Push to accessible registry
-docker tag flts-preprocess:latest <registry>/flts-preprocess:latest
-docker push <registry>/flts-preprocess:latest
-
-# Solution 3: Update component.yaml with full image path
-# Edit components/preprocess/component.yaml
-image: <registry>/flts-preprocess:latest
+# Solution: Run from correct directory
+cd /Users/arnavde/Python/AI/kubeflow-02/ml_pipeline_v3
+python kubeflow_pipeline/compile_pipeline_v2.py
 ```
 
-### Artifact Not Found
+**Issue**: `SyntaxError: non-default argument follows default argument`
+```python
+# Solution: Reorder parameters - outputs first, then inputs with None, then optionals
+# See "Parameter Ordering" section above
+```
 
-**Issue**: Component fails with "Artifact path not found"
+### Test Failures
+
+**Issue**: Component validation fails with "missing component_spec"
 ```bash
-# Solution: Check MinIO connectivity
-kubectl exec -it <pod-name> -n kubeflow -- curl http://minio:9000
-
-# Verify bucket exists
-mc ls minio/<bucket-name>
-
-# Check environment variables
-kubectl exec <pod-name> -n kubeflow -- env | grep MINIO
+# Solution: Ensure @dsl.component decorator is present
+# Check components_v2.py has @dsl.component(base_image="...") above each function
 ```
 
-### MLflow Connection Errors
-
-**Issue**: "Connection refused to MLflow tracking server"
+**Issue**: Pipeline compilation produces 0-byte file
 ```bash
-# Solution: Verify MLflow is running
-kubectl get pods -n kubeflow | grep mlflow
-
-# Port-forward for testing
-kubectl port-forward -n kubeflow svc/mlflow 5000:5000
-
-# Test connectivity from component
-kubectl exec <pod-name> -n kubeflow -- curl http://mlflow:5000/health
+# Solution: Check for Python errors during compilation
+python kubeflow_pipeline/compile_pipeline_v2.py 2>&1 | tee compile_log.txt
 ```
 
-### Training Failures
+### Version Conflicts
 
-**Issue**: OOM (Out of Memory) errors during training
-```yaml
-# Solution: Reduce batch size in pipeline parameters
-params:
-  batch_size: 16  # Instead of 32
-  num_epochs: 30  # Reduce if needed
+**Issue**: `ImportError: cannot import name 'ContainerOp' from 'kfp.dsl'`
+```bash
+# Solution: You have KFP v1 installed, need v2
+pip uninstall kfp kfp-pipeline-spec kfp-server-api
+pip install "kfp>=2.0.0,<3.0.0"
 ```
 
-**Issue**: NaN loss during training
-```yaml
-# Solution: Adjust learning rate and preprocessing
-params:
-  learning_rate: 0.0001  # Smaller LR
-  clip_enable: true      # Enable outlier clipping
-  handle_nans: true      # Ensure NaN handling
+**Issue**: Pydantic version warning
+```bash
+# Warning: "mlflow 2.x requires pydantic>=2.0, but you have 1.10.24"
+# Solution: Non-critical, compilation still works
+# To fix (optional): pip install --upgrade pydantic
 ```
-
-### Debugging Tips
-
-1. **Enable verbose logging**:
-   - Set `LOG_LEVEL=DEBUG` in component environment variables
-
-2. **Check component health**:
-   ```bash
-   kubectl describe pod <pod-name> -n kubeflow
-   ```
-
-3. **Inspect artifact metadata**:
-   ```bash
-   mc cat minio/processed-data/<identifier>-metadata.json | jq
-   ```
-
-4. **Test components locally**:
-   ```bash
-   docker run -it --rm \
-     -e USE_KFP=1 \
-     -e MINIO_ENDPOINT=host.docker.internal:9000 \
-     flts-preprocess:latest \
-     python preprocess_container.py --help
-   ```
 
 ---
 
-## 🛠️ Development
+## 🔄 KFP v1 → v2 Migration
 
-### Local Testing
+This project migrated from KFP v1.8.22 to v2.15.2. Key changes documented in `CHANGES_KFP_VERSION.md`.
 
-Test pipeline compilation without KFP cluster:
-```bash
-# Dry-run compilation
-python compile_pipeline.py --output /tmp/test_pipeline.yaml
+### What Changed
 
-# Validate YAML
-python -c "import yaml; yaml.safe_load(open('/tmp/test_pipeline.yaml'))"
-```
+**Before (v1):**
+- Used `kfp.dsl.ContainerOp` for components
+- Loaded components from YAML files
+- Compiled to Argo Workflow YAML (9,695 bytes)
+- Files: `compile_kfp_v1.py`, `compile_pipeline_v1.py`
 
-### Modifying Components
+**After (v2):**
+- Uses `@dsl.component` decorator for pure Python components
+- No YAML files - all definitions in Python
+- Compiles to KFP v2 IR JSON (40,500 bytes)
+- Files: `components_v2.py`, `pipeline_v2.py`, `compile_pipeline_v2.py`
 
-After updating component code:
+### Breaking Changes
 
-1. **Rebuild container**:
-   ```bash
-   docker-compose -f docker-compose.kfp.yaml build <service-name>
-   ```
+- ❌ `kfp.dsl.ContainerOp` removed
+- ❌ `kfp.components.load_component_from_file()` removed
+- ✅ `@dsl.component` decorator required
+- ✅ Type annotations mandatory: `dsl.Input`, `dsl.Output`, `dsl.Dataset`, etc.
+- ✅ JSON IR spec instead of YAML
 
-2. **Update component.yaml** (if signature changed):
-   - Edit `components/<component>/component.yaml`
-   - Update inputs/outputs
+### V1 Artifacts
 
-3. **Recompile pipeline**:
-   ```bash
-   python compile_pipeline.py
-   ```
+Old v1 code moved to `_deprecated/`:
+- `compile_kfp_v1.py` - v1 compilation attempt
+- `compile_pipeline_v1.py` - v1 ContainerOp approach
+- `README_v1.md` - Old README
 
-4. **Upload new version**:
-   - Upload to KFP UI with incremented version
-   - Or use same pipeline ID to overwrite
-
-### Adding New Components
-
-1. **Create component directory**:
-   ```bash
-   mkdir -p components/my_component
-   ```
-
-2. **Create component.yaml**:
-   ```yaml
-   name: my_component
-   description: Custom component
-   inputs:
-     - {name: input_data, type: Dataset}
-   outputs:
-     - {name: output_data, type: Artifact}
-   implementation:
-     container:
-       image: my-component:latest
-       command: [python, my_component.py]
-       args:
-         - --input-data
-         - {inputPath: input_data}
-         - --output-data
-         - {outputPath: output_data}
-   ```
-
-3. **Update pipeline.py**:
-   - Load new component
-   - Add to pipeline DAG
-
-4. **Recompile and test**
-
-### Version Control
-
-Track pipeline versions:
-```bash
-# Tag compiled pipeline
-git add pipeline.job.yaml
-git commit -m "Pipeline v2.1.0: Added XGBoost component"
-git tag v2.1.0
-```
+**Do NOT use v1 code** - retained only for historical reference.
 
 ---
 
 ## 📚 Additional Resources
 
-- [Kubeflow Pipelines Documentation](https://www.kubeflow.org/docs/components/pipelines/)
-- [KFP SDK v2 Reference](https://kubeflow-pipelines.readthedocs.io/)
-- [MinIO Python SDK](https://min.io/docs/minio/linux/developers/python/API.html)
-- [MLflow Tracking](https://mlflow.org/docs/latest/tracking.html)
+**Official Documentation:**
+- [KFP v2 SDK Documentation](https://kubeflow-pipelines.readthedocs.io/en/latest/)
+- [Kubeflow Pipelines Overview](https://www.kubeflow.org/docs/components/pipelines/)
+- [KFP v2 Migration Guide](https://www.kubeflow.org/docs/components/pipelines/v2/migration/)
+
+**Component Images:**
+- Built from: `components/preprocess/`, `components/train_gru/`, etc.
+- Dockerfile locations: See component directories
+- MinIO integration: All components use S3-compatible storage
+
+**Related Files:**
+- `CHANGES_KFP_VERSION.md` - Detailed migration notes
+- `_deprecated/README.md` - V1 deprecation notice
+- `docker-compose.yaml` - Local infrastructure (MinIO, MLflow, etc.)
 
 ---
 
-## 📝 License
+## 📝 Summary
 
-Internal use only - FLTS Project
+**This runbook covers:**
+- ✅ Step 0: Environment setup (KFP v2.15.2)
+- ✅ Step 1: V1 artifact cleanup
+- ✅ Step 2: Pure Python component definitions
+- ✅ Step 3: Pipeline DAG implementation
+- ✅ Step 4: Compilation to JSON IR
+- ✅ Step 5: Testing and validation
+- ✅ Step 8: Complete pipeline definition
+
+**What's NOT covered (Step 9):**
+- ❌ Uploading to Kubeflow cluster
+- ❌ Creating pipeline runs
+- ❌ Kubernetes deployment
+- ❌ `kfp.Client()` usage
+
+**Key Artifacts:**
+- `artifacts/flts_pipeline_v2.json` (40,500 bytes) - Ready for Step 9 deployment
+- `components_v2.py` (225 lines) - All component definitions
+- `pipeline_v2.py` (169 lines) - Pipeline DAG
+- `compile_pipeline_v2.py` (103 lines) - Compilation script
 
 ---
 
-**Questions?** Contact the ML Infrastructure team or file an issue in the project repository.
+**Questions?** Check `CHANGES_KFP_VERSION.md` for migration details or inspect test output from `run_all_tests.sh`.
+
+**Next Steps (Step 9 - Not Covered Here):**
+1. Upload `artifacts/flts_pipeline_v2.json` to KFP UI
+2. Create pipeline run with desired parameters
+3. Monitor execution and collect results
+
+**End of Step 8. Step 9 intentionally NOT started.**
