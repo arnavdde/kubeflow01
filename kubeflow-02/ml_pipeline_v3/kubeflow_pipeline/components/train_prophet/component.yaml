@@ -1,0 +1,120 @@
+name: train_prophet
+description: |
+  Train Prophet time-series forecasting model on preprocessed data.
+  Consumes training dataset artifact, trains Facebook Prophet model, logs to MLflow, and outputs
+  model artifact with test metrics for downstream evaluation.
+
+inputs:
+  - name: training_data
+    type: Dataset
+    description: Preprocessed training dataset artifact (MinIO URI + metadata)
+  
+  - name: config_hash
+    type: String
+    description: SHA256 hash of preprocessing config for run lineage tracking
+  
+  - name: mlflow_tracking_uri
+    type: String
+    default: "http://mlflow:5000"
+    description: MLflow tracking server endpoint
+  
+  - name: mlflow_s3_endpoint
+    type: String
+    default: "http://minio:9000"
+    description: MinIO endpoint for MLflow artifact storage
+  
+  - name: gateway_url
+    type: String
+    default: "http://fastapi-app:8000"
+    description: FastAPI gateway for MinIO claim-check downloads
+  
+  - name: seasonality_mode
+    type: String
+    default: "additive"
+    description: Type of seasonality component ('additive' or 'multiplicative')
+  
+  - name: changepoint_prior_scale
+    type: Float
+    default: 0.05
+    description: Flexibility of trend changepoints (higher = more flexible)
+  
+  - name: seasonality_prior_scale
+    type: Float
+    default: 10.0
+    description: Strength of seasonality model
+  
+  - name: holidays_prior_scale
+    type: Float
+    default: 10.0
+    description: Strength of holiday effects
+  
+  - name: daily_seasonality
+    type: Boolean
+    default: true
+    description: Enable daily seasonality component
+  
+  - name: weekly_seasonality
+    type: Boolean
+    default: true
+    description: Enable weekly seasonality component
+  
+  - name: yearly_seasonality
+    type: Boolean
+    default: true
+    description: Enable yearly seasonality component
+
+outputs:
+  - name: model
+    type: Model
+    description: Trained Prophet model artifact (MLflow URI + metadata)
+  
+  - name: metrics
+    type: Artifact
+    description: Test set performance metrics (RMSE, MAE, MSE, composite score)
+  
+  - name: run_id
+    type: String
+    description: MLflow run ID for experiment tracking
+
+implementation:
+  container:
+    image: nonml-container:latest
+    env:
+      - name: USE_KFP
+        value: "1"
+      - name: MODEL_TYPE
+        value: "PROPHET"
+      - name: CONFIG_HASH
+        value: {inputValue: config_hash}
+      - name: MLFLOW_TRACKING_URI
+        value: {inputValue: mlflow_tracking_uri}
+      - name: MLFLOW_S3_ENDPOINT_URL
+        value: {inputValue: mlflow_s3_endpoint}
+      - name: GATEWAY_URL
+        value: {inputValue: gateway_url}
+      - name: SEASONALITY_MODE
+        value: {inputValue: seasonality_mode}
+      - name: CHANGEPOINT_PRIOR_SCALE
+        value: {inputValue: changepoint_prior_scale}
+      - name: SEASONALITY_PRIOR_SCALE
+        value: {inputValue: seasonality_prior_scale}
+      - name: HOLIDAYS_PRIOR_SCALE
+        value: {inputValue: holidays_prior_scale}
+      - name: DAILY_SEASONALITY
+        value: {inputValue: daily_seasonality}
+      - name: WEEKLY_SEASONALITY
+        value: {inputValue: weekly_seasonality}
+      - name: YEARLY_SEASONALITY
+        value: {inputValue: yearly_seasonality}
+      - name: KFP_TRAINING_DATA_INPUT_PATH
+        value: {inputPath: training_data}
+      - name: KFP_MODEL_OUTPUT_PATH
+        value: {outputPath: model}
+      - name: KFP_METRICS_OUTPUT_PATH
+        value: {outputPath: metrics}
+      - name: KFP_RUN_ID_OUTPUT_PATH
+        value: {outputPath: run_id}
+      - name: AWS_ACCESS_KEY_ID
+        value: "minio_access_key"
+      - name: AWS_SECRET_ACCESS_KEY
+        value: "minio_secret_key"

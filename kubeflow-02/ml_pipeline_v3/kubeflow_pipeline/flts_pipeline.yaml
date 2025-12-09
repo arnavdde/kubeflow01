@@ -1,0 +1,227 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: flts-time-series-pipeline-
+  annotations: {pipelines.kubeflow.org/kfp_sdk_version: 1.8.22, pipelines.kubeflow.org/pipeline_compilation_time: '2025-12-02T13:48:44.049789',
+    pipelines.kubeflow.org/pipeline_spec: '{"description": "Complete forecasting pipeline:
+      preprocess -> train (3 models) -> eval -> inference", "inputs": [{"default":
+      "PobleSec", "name": "dataset_name", "optional": true, "type": "String"}, {"default":
+      "run-001", "name": "identifier", "optional": true, "type": "String"}, {"default":
+      "http://mlflow:5000", "name": "mlflow_uri", "optional": true, "type": "String"},
+      {"default": "http://fastapi-app:8000", "name": "gateway_url", "optional": true,
+      "type": "String"}], "name": "FLTS Time Series Pipeline"}'}
+  labels: {pipelines.kubeflow.org/kfp_sdk_version: 1.8.22}
+spec:
+  entrypoint: flts-time-series-pipeline
+  templates:
+  - name: evaluate
+    container:
+      env:
+      - {name: USE_KFP, value: '1'}
+      - {name: MLFLOW_TRACKING_URI, value: '{{inputs.parameters.mlflow_uri}}'}
+      - {name: KFP_GRU_MODEL_INPUT_PATH, value: '{{inputs.parameters.train-gru-model}}'}
+      - {name: KFP_LSTM_MODEL_INPUT_PATH, value: '{{inputs.parameters.train-lstm-model}}'}
+      - {name: KFP_PROPHET_MODEL_INPUT_PATH, value: '{{inputs.parameters.train-prophet-model}}'}
+      - {name: KFP_PROMOTION_OUTPUT_PATH, value: /tmp/outputs/promotion_pointer/data}
+      image: eval-container:latest
+    inputs:
+      parameters:
+      - {name: mlflow_uri}
+      - {name: train-gru-model}
+      - {name: train-lstm-model}
+      - {name: train-prophet-model}
+    outputs:
+      parameters:
+      - name: evaluate-promotion
+        valueFrom: {path: /tmp/outputs/promotion_pointer/data}
+      artifacts:
+      - {name: evaluate-promotion, path: /tmp/outputs/promotion_pointer/data}
+    metadata:
+      labels:
+        pipelines.kubeflow.org/kfp_sdk_version: 1.8.22
+        pipelines.kubeflow.org/pipeline-sdk-type: kfp
+        pipelines.kubeflow.org/enable_caching: "true"
+  - name: flts-time-series-pipeline
+    inputs:
+      parameters:
+      - {name: dataset_name}
+      - {name: gateway_url}
+      - {name: mlflow_uri}
+    dag:
+      tasks:
+      - name: evaluate
+        template: evaluate
+        dependencies: [train-gru, train-lstm, train-prophet]
+        arguments:
+          parameters:
+          - {name: mlflow_uri, value: '{{inputs.parameters.mlflow_uri}}'}
+          - {name: train-gru-model, value: '{{tasks.train-gru.outputs.parameters.train-gru-model}}'}
+          - {name: train-lstm-model, value: '{{tasks.train-lstm.outputs.parameters.train-lstm-model}}'}
+          - {name: train-prophet-model, value: '{{tasks.train-prophet.outputs.parameters.train-prophet-model}}'}
+      - name: inference
+        template: inference
+        dependencies: [evaluate, preprocess]
+        arguments:
+          parameters:
+          - {name: evaluate-promotion, value: '{{tasks.evaluate.outputs.parameters.evaluate-promotion}}'}
+          - {name: mlflow_uri, value: '{{inputs.parameters.mlflow_uri}}'}
+          - {name: preprocess-inference_data, value: '{{tasks.preprocess.outputs.parameters.preprocess-inference_data}}'}
+      - name: preprocess
+        template: preprocess
+        arguments:
+          parameters:
+          - {name: dataset_name, value: '{{inputs.parameters.dataset_name}}'}
+          - {name: gateway_url, value: '{{inputs.parameters.gateway_url}}'}
+      - name: train-gru
+        template: train-gru
+        dependencies: [preprocess]
+        arguments:
+          parameters:
+          - {name: mlflow_uri, value: '{{inputs.parameters.mlflow_uri}}'}
+          - {name: preprocess-training_data, value: '{{tasks.preprocess.outputs.parameters.preprocess-training_data}}'}
+      - name: train-lstm
+        template: train-lstm
+        dependencies: [preprocess]
+        arguments:
+          parameters:
+          - {name: mlflow_uri, value: '{{inputs.parameters.mlflow_uri}}'}
+          - {name: preprocess-training_data, value: '{{tasks.preprocess.outputs.parameters.preprocess-training_data}}'}
+      - name: train-prophet
+        template: train-prophet
+        dependencies: [preprocess]
+        arguments:
+          parameters:
+          - {name: mlflow_uri, value: '{{inputs.parameters.mlflow_uri}}'}
+          - {name: preprocess-training_data, value: '{{tasks.preprocess.outputs.parameters.preprocess-training_data}}'}
+  - name: inference
+    container:
+      command: [python, -m, main]
+      env:
+      - {name: USE_KFP, value: '1'}
+      - {name: MLFLOW_TRACKING_URI, value: '{{inputs.parameters.mlflow_uri}}'}
+      - {name: KFP_INFERENCE_DATA_INPUT_PATH, value: '{{inputs.parameters.preprocess-inference_data}}'}
+      - {name: KFP_PROMOTED_MODEL_INPUT_PATH, value: '{{inputs.parameters.evaluate-promotion}}'}
+      - {name: KFP_INFERENCE_RESULTS_OUTPUT_PATH, value: /tmp/outputs/inference_results/data}
+      image: inference-container:latest
+    inputs:
+      parameters:
+      - {name: evaluate-promotion}
+      - {name: mlflow_uri}
+      - {name: preprocess-inference_data}
+    outputs:
+      artifacts:
+      - {name: inference-results, path: /tmp/outputs/inference_results/data}
+    metadata:
+      labels:
+        pipelines.kubeflow.org/kfp_sdk_version: 1.8.22
+        pipelines.kubeflow.org/pipeline-sdk-type: kfp
+        pipelines.kubeflow.org/enable_caching: "true"
+  - name: preprocess
+    container:
+      command: [python, main.py]
+      env:
+      - {name: USE_KFP, value: '1'}
+      - {name: DATASET_NAME, value: '{{inputs.parameters.dataset_name}}'}
+      - {name: GATEWAY_URL, value: '{{inputs.parameters.gateway_url}}'}
+      - {name: KFP_TRAINING_DATA_OUTPUT_PATH, value: /tmp/outputs/training_data/data}
+      - {name: KFP_INFERENCE_DATA_OUTPUT_PATH, value: /tmp/outputs/inference_data/data}
+      - {name: KFP_CONFIG_HASH_OUTPUT_PATH, value: /tmp/outputs/config_hash/data}
+      image: flts-preprocess:latest
+    inputs:
+      parameters:
+      - {name: dataset_name}
+      - {name: gateway_url}
+    outputs:
+      parameters:
+      - name: preprocess-inference_data
+        valueFrom: {path: /tmp/outputs/inference_data/data}
+      - name: preprocess-training_data
+        valueFrom: {path: /tmp/outputs/training_data/data}
+      artifacts:
+      - {name: preprocess-config_hash, path: /tmp/outputs/config_hash/data}
+      - {name: preprocess-inference_data, path: /tmp/outputs/inference_data/data}
+      - {name: preprocess-training_data, path: /tmp/outputs/training_data/data}
+    metadata:
+      labels:
+        pipelines.kubeflow.org/kfp_sdk_version: 1.8.22
+        pipelines.kubeflow.org/pipeline-sdk-type: kfp
+        pipelines.kubeflow.org/enable_caching: "true"
+  - name: train-gru
+    container:
+      env:
+      - {name: USE_KFP, value: '1'}
+      - {name: MODEL_TYPE, value: GRU}
+      - {name: MLFLOW_TRACKING_URI, value: '{{inputs.parameters.mlflow_uri}}'}
+      - {name: KFP_TRAINING_DATA_INPUT_PATH, value: '{{inputs.parameters.preprocess-training_data}}'}
+      - {name: KFP_MODEL_OUTPUT_PATH, value: /tmp/outputs/model/data}
+      image: train-container:latest
+    inputs:
+      parameters:
+      - {name: mlflow_uri}
+      - {name: preprocess-training_data}
+    outputs:
+      parameters:
+      - name: train-gru-model
+        valueFrom: {path: /tmp/outputs/model/data}
+      artifacts:
+      - {name: train-gru-model, path: /tmp/outputs/model/data}
+    metadata:
+      labels:
+        pipelines.kubeflow.org/kfp_sdk_version: 1.8.22
+        pipelines.kubeflow.org/pipeline-sdk-type: kfp
+        pipelines.kubeflow.org/enable_caching: "true"
+  - name: train-lstm
+    container:
+      env:
+      - {name: USE_KFP, value: '1'}
+      - {name: MODEL_TYPE, value: LSTM}
+      - {name: MLFLOW_TRACKING_URI, value: '{{inputs.parameters.mlflow_uri}}'}
+      - {name: KFP_TRAINING_DATA_INPUT_PATH, value: '{{inputs.parameters.preprocess-training_data}}'}
+      - {name: KFP_MODEL_OUTPUT_PATH, value: /tmp/outputs/model/data}
+      image: train-container:latest
+    inputs:
+      parameters:
+      - {name: mlflow_uri}
+      - {name: preprocess-training_data}
+    outputs:
+      parameters:
+      - name: train-lstm-model
+        valueFrom: {path: /tmp/outputs/model/data}
+      artifacts:
+      - {name: train-lstm-model, path: /tmp/outputs/model/data}
+    metadata:
+      labels:
+        pipelines.kubeflow.org/kfp_sdk_version: 1.8.22
+        pipelines.kubeflow.org/pipeline-sdk-type: kfp
+        pipelines.kubeflow.org/enable_caching: "true"
+  - name: train-prophet
+    container:
+      env:
+      - {name: USE_KFP, value: '1'}
+      - {name: MODEL_TYPE, value: PROPHET}
+      - {name: MLFLOW_TRACKING_URI, value: '{{inputs.parameters.mlflow_uri}}'}
+      - {name: KFP_TRAINING_DATA_INPUT_PATH, value: '{{inputs.parameters.preprocess-training_data}}'}
+      - {name: KFP_MODEL_OUTPUT_PATH, value: /tmp/outputs/model/data}
+      image: nonml-container:latest
+    inputs:
+      parameters:
+      - {name: mlflow_uri}
+      - {name: preprocess-training_data}
+    outputs:
+      parameters:
+      - name: train-prophet-model
+        valueFrom: {path: /tmp/outputs/model/data}
+      artifacts:
+      - {name: train-prophet-model, path: /tmp/outputs/model/data}
+    metadata:
+      labels:
+        pipelines.kubeflow.org/kfp_sdk_version: 1.8.22
+        pipelines.kubeflow.org/pipeline-sdk-type: kfp
+        pipelines.kubeflow.org/enable_caching: "true"
+  arguments:
+    parameters:
+    - {name: dataset_name, value: PobleSec}
+    - {name: identifier, value: run-001}
+    - {name: mlflow_uri, value: 'http://mlflow:5000'}
+    - {name: gateway_url, value: 'http://fastapi-app:8000'}
+  serviceAccountName: pipeline-runner

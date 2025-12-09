@@ -1,0 +1,81 @@
+name: Preprocess Time Series Data
+description: |
+  Preprocesses raw time-series CSV data into training and inference Parquet datasets.
+  
+  Features:
+  - Deterministic config hash generation for pipeline lineage
+  - MinIO claim-check pattern (artifacts store URIs, data in MinIO)
+  - Metadata embedding in Parquet files
+  - Configurable sampling for faster development iterations
+  - Idiomatic preprocessing: handle NaNs, clip outliers, scale, time features, lags
+
+metadata:
+  annotations:
+    author: FLTS Pipeline Team
+    version: v1.0.0-kfp
+  labels:
+    pipeline-stage: preprocessing
+    framework: pandas-pyarrow
+
+inputs:
+  - {name: dataset_name, type: String, description: 'Dataset name (e.g., PobleSec)'}
+  - {name: identifier, type: String, description: 'Run identifier for lineage tracking'}
+  - {name: sample_train_rows, type: Integer, default: '0', description: 'Number of training rows to sample (0=all)'}
+  - {name: sample_test_rows, type: Integer, default: '0', description: 'Number of test rows to sample (0=all)'}
+  - {name: sample_strategy, type: String, default: 'head', description: 'Sampling strategy: head or random'}
+  - {name: sample_seed, type: Integer, default: '42', description: 'Random seed for reproducible sampling'}
+  - {name: force_reprocess, type: Integer, default: '0', description: 'Force reprocessing even if cached (1=force)'}
+  - {name: extra_hash_salt, type: String, default: '', description: 'Salt to force new config hash without logic change'}
+  - {name: handle_nans, type: Boolean, default: 'true', description: 'Enable NaN handling'}
+  - {name: nans_threshold, type: Float, default: '0.33', description: 'NaN threshold for column dropping'}
+  - {name: nans_knn, type: Integer, default: '2', description: 'KNN window for imputation'}
+  - {name: clip_enable, type: Boolean, default: 'false', description: 'Enable outlier clipping'}
+  - {name: clip_method, type: String, default: 'iqr', description: 'Clipping method: iqr or percentile'}
+  - {name: clip_factor, type: Float, default: '1.5', description: 'IQR multiplier for outlier detection'}
+  - {name: time_features_enable, type: Boolean, default: 'true', description: 'Enable time-based features'}
+  - {name: lags_enable, type: Boolean, default: 'false', description: 'Enable lag features'}
+  - {name: lags_n, type: Integer, default: '0', description: 'Number of lag steps'}
+  - {name: scaler, type: String, default: 'MinMaxScaler', description: 'Scaler method (MinMaxScaler, StandardScaler, etc.)'}
+  - {name: gateway_url, type: String, default: 'http://fastapi-app:8000', description: 'MinIO gateway URL'}
+  - {name: input_bucket, type: String, default: 'dataset', description: 'Input bucket for raw CSV files'}
+  - {name: output_bucket, type: String, default: 'processed-data', description: 'Output bucket for Parquet files'}
+
+outputs:
+  - {name: training_data, type: Dataset, description: 'Training dataset (Parquet in MinIO)'}
+  - {name: inference_data, type: Dataset, description: 'Test/inference dataset (Parquet in MinIO)'}
+  - {name: config_hash, type: String, description: 'SHA256 hash of preprocessing config for lineage'}
+  - {name: config_json, type: String, description: 'Canonical JSON config for metadata'}
+
+implementation:
+  container:
+    image: flts-preprocess:latest
+    command:
+      - python
+      - main.py
+    env:
+      - {name: USE_KFP, value: '1'}
+      - {name: DATASET_NAME, value: {inputValue: dataset_name}}
+      - {name: IDENTIFIER, value: {inputValue: identifier}}
+      - {name: SAMPLE_TRAIN_ROWS, value: {inputValue: sample_train_rows}}
+      - {name: SAMPLE_TEST_ROWS, value: {inputValue: sample_test_rows}}
+      - {name: SAMPLE_STRATEGY, value: {inputValue: sample_strategy}}
+      - {name: SAMPLE_SEED, value: {inputValue: sample_seed}}
+      - {name: FORCE_REPROCESS, value: {inputValue: force_reprocess}}
+      - {name: EXTRA_HASH_SALT, value: {inputValue: extra_hash_salt}}
+      - {name: HANDLE_NANS, value: {inputValue: handle_nans}}
+      - {name: NANS_THRESHOLD, value: {inputValue: nans_threshold}}
+      - {name: NANS_KNN, value: {inputValue: nans_knn}}
+      - {name: CLIP_ENABLE, value: {inputValue: clip_enable}}
+      - {name: CLIP_METHOD, value: {inputValue: clip_method}}
+      - {name: CLIP_FACTOR, value: {inputValue: clip_factor}}
+      - {name: TIME_FEATURES_ENABLE, value: {inputValue: time_features_enable}}
+      - {name: LAGS_ENABLE, value: {inputValue: lags_enable}}
+      - {name: LAGS_N, value: {inputValue: lags_n}}
+      - {name: SCALER, value: {inputValue: scaler}}
+      - {name: GATEWAY_URL, value: {inputValue: gateway_url}}
+      - {name: INPUT_BUCKET, value: {inputValue: input_bucket}}
+      - {name: OUTPUT_BUCKET, value: {inputValue: output_bucket}}
+      - {name: KFP_TRAINING_DATA_OUTPUT_PATH, value: {outputPath: training_data}}
+      - {name: KFP_INFERENCE_DATA_OUTPUT_PATH, value: {outputPath: inference_data}}
+      - {name: KFP_CONFIG_HASH_OUTPUT_PATH, value: {outputPath: config_hash}}
+      - {name: KFP_CONFIG_JSON_OUTPUT_PATH, value: {outputPath: config_json}}

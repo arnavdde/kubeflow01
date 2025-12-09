@@ -1,0 +1,113 @@
+name: run_inference
+description: |
+  Execute time-series forecasting inference using a promoted model.
+  Consumes preprocessed inference data (Dataset) and a promoted model pointer (Model),
+  loads the model from MLflow, runs windowed batch inference with microbatching support,
+  writes structured JSONL results to MinIO, and outputs inference metadata for downstream monitoring.
+
+inputs:
+  - name: inference_data
+    type: Dataset
+    description: Preprocessed time-series data for inference (Parquet format with DatetimeIndex)
+  
+  - name: promoted_model
+    type: Model
+    description: Promoted model artifact pointer (from eval component) with MLflow URI and metadata
+  
+  - name: identifier
+    type: String
+    default: ""
+    description: Pipeline run identifier for inference log organization in MinIO
+  
+  - name: mlflow_tracking_uri
+    type: String
+    default: "http://mlflow:5000"
+    description: MLflow tracking server endpoint
+  
+  - name: mlflow_s3_endpoint
+    type: String
+    default: "http://minio:9000"
+    description: MinIO endpoint for MLflow artifact storage
+  
+  - name: gateway_url
+    type: String
+    default: "http://fastapi-app:8000"
+    description: FastAPI gateway for MinIO uploads and downloads
+  
+  - name: inference_log_bucket
+    type: String
+    default: "inference-logs"
+    description: MinIO bucket for structured JSONL inference logs
+  
+  - name: inference_length
+    type: Integer
+    default: 1
+    description: Number of forecast steps to generate per inference window
+  
+  - name: sample_idx
+    type: Integer
+    default: 0
+    description: Starting sample index for windowed inference
+  
+  - name: enable_microbatch
+    type: String
+    default: "false"
+    description: Enable microbatching for inference (true/false)
+  
+  - name: batch_size
+    type: Integer
+    default: 32
+    description: Batch size for microbatching when enabled
+
+outputs:
+  - name: inference_results
+    type: Artifact
+    description: Structured JSONL inference results (predictions with timestamps and metadata)
+  
+  - name: inference_metadata
+    type: Artifact
+    description: Inference execution metadata (model info, timings, row counts)
+
+implementation:
+  container:
+    image: inference-container:latest
+    command: ["python", "-m", "main"]
+    env:
+      - name: USE_KFP
+        value: "1"
+      - name: IDENTIFIER
+        value: {inputValue: identifier}
+      - name: MLFLOW_TRACKING_URI
+        value: {inputValue: mlflow_tracking_uri}
+      - name: MLFLOW_S3_ENDPOINT_URL
+        value: {inputValue: mlflow_s3_endpoint}
+      - name: GATEWAY_URL
+        value: {inputValue: gateway_url}
+      - name: INFERENCE_LOG_BUCKET
+        value: {inputValue: inference_log_bucket}
+      - name: INFERENCE_LENGTH
+        value: {inputValue: inference_length}
+      - name: SAMPLE_IDX
+        value: {inputValue: sample_idx}
+      - name: ENABLE_MICROBATCH
+        value: {inputValue: enable_microbatch}
+      - name: BATCH_SIZE
+        value: {inputValue: batch_size}
+      - name: KFP_INFERENCE_DATA_INPUT_PATH
+        value: {inputPath: inference_data}
+      - name: KFP_PROMOTED_MODEL_INPUT_PATH
+        value: {inputPath: promoted_model}
+      - name: KFP_INFERENCE_RESULTS_OUTPUT_PATH
+        value: {outputPath: inference_results}
+      - name: KFP_INFERENCE_METADATA_OUTPUT_PATH
+        value: {outputPath: inference_metadata}
+      - name: AWS_ACCESS_KEY_ID
+        value: "minio_access_key"
+      - name: AWS_SECRET_ACCESS_KEY
+        value: "minio_secret_key"
+      - name: AWS_DEFAULT_REGION
+        value: "us-east-1"
+      - name: DISABLE_BUCKET_ENSURE
+        value: "0"
+      - name: DISABLE_STARTUP_INFERENCE
+        value: "1"

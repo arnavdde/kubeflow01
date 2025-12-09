@@ -1,0 +1,127 @@
+name: train_gru
+description: |
+  Train GRU (Gated Recurrent Unit) time-series forecasting model on preprocessed data.
+  Consumes training dataset artifact, trains PyTorch GRU model, logs to MLflow, and outputs
+  model artifact with test metrics for downstream evaluation.
+
+inputs:
+  - name: training_data
+    type: Dataset
+    description: Preprocessed training dataset artifact (MinIO URI + metadata)
+  
+  - name: config_hash
+    type: String
+    description: SHA256 hash of preprocessing config for run lineage tracking
+  
+  - name: mlflow_tracking_uri
+    type: String
+    default: "http://mlflow:5000"
+    description: MLflow tracking server endpoint
+  
+  - name: mlflow_s3_endpoint
+    type: String
+    default: "http://minio:9000"
+    description: MinIO endpoint for MLflow artifact storage
+  
+  - name: gateway_url
+    type: String
+    default: "http://fastapi-app:8000"
+    description: FastAPI gateway for MinIO claim-check downloads
+  
+  - name: hidden_size
+    type: Integer
+    default: 64
+    description: GRU hidden layer dimensionality
+  
+  - name: num_layers
+    type: Integer
+    default: 2
+    description: Number of stacked GRU layers
+  
+  - name: dropout
+    type: Float
+    default: 0.2
+    description: Dropout probability for regularization
+  
+  - name: learning_rate
+    type: Float
+    default: 0.001
+    description: Adam optimizer learning rate
+  
+  - name: batch_size
+    type: Integer
+    default: 32
+    description: Training batch size
+  
+  - name: num_epochs
+    type: Integer
+    default: 50
+    description: Number of training epochs
+  
+  - name: early_stopping_patience
+    type: Integer
+    default: 10
+    description: Epochs without improvement before early stopping
+  
+  - name: window_size
+    type: Integer
+    default: 12
+    description: Lookback window for sequence input
+
+outputs:
+  - name: model
+    type: Model
+    description: Trained GRU model artifact (MLflow URI + metadata)
+  
+  - name: metrics
+    type: Artifact
+    description: Test set performance metrics (RMSE, MAE, MSE, composite score)
+  
+  - name: run_id
+    type: String
+    description: MLflow run ID for experiment tracking
+
+implementation:
+  container:
+    image: train-container:latest
+    env:
+      - name: USE_KFP
+        value: "1"
+      - name: MODEL_TYPE
+        value: "GRU"
+      - name: CONFIG_HASH
+        value: {inputValue: config_hash}
+      - name: MLFLOW_TRACKING_URI
+        value: {inputValue: mlflow_tracking_uri}
+      - name: MLFLOW_S3_ENDPOINT_URL
+        value: {inputValue: mlflow_s3_endpoint}
+      - name: GATEWAY_URL
+        value: {inputValue: gateway_url}
+      - name: HIDDEN_SIZE
+        value: {inputValue: hidden_size}
+      - name: NUM_LAYERS
+        value: {inputValue: num_layers}
+      - name: DROPOUT
+        value: {inputValue: dropout}
+      - name: LEARNING_RATE
+        value: {inputValue: learning_rate}
+      - name: BATCH_SIZE
+        value: {inputValue: batch_size}
+      - name: NUM_EPOCHS
+        value: {inputValue: num_epochs}
+      - name: EARLY_STOPPING_PATIENCE
+        value: {inputValue: early_stopping_patience}
+      - name: WINDOW_SIZE
+        value: {inputValue: window_size}
+      - name: KFP_TRAINING_DATA_INPUT_PATH
+        value: {inputPath: training_data}
+      - name: KFP_MODEL_OUTPUT_PATH
+        value: {outputPath: model}
+      - name: KFP_METRICS_OUTPUT_PATH
+        value: {outputPath: metrics}
+      - name: KFP_RUN_ID_OUTPUT_PATH
+        value: {outputPath: run_id}
+      - name: AWS_ACCESS_KEY_ID
+        value: "minio_access_key"
+      - name: AWS_SECRET_ACCESS_KEY
+        value: "minio_secret_key"

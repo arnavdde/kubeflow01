@@ -1,0 +1,106 @@
+name: eval_models
+description: |
+  Evaluate and select the best time-series forecasting model from GRU, LSTM, and Prophet candidates.
+  Consumes trained model artifacts, computes composite scores (weighted RMSE, MAE, MSE), selects the
+  best performer, writes promotion history to MinIO, and outputs promotion pointer for downstream inference.
+
+inputs:
+  - name: gru_model
+    type: Model
+    description: Trained GRU model artifact with test metrics
+  
+  - name: lstm_model
+    type: Model
+    description: Trained LSTM model artifact with test metrics
+  
+  - name: prophet_model
+    type: Model
+    description: Trained Prophet model artifact with test metrics
+  
+  - name: config_hash
+    type: String
+    description: SHA256 hash of preprocessing config for run lineage tracking
+  
+  - name: identifier
+    type: String
+    default: ""
+    description: Pipeline run identifier for promotion history organization
+  
+  - name: mlflow_tracking_uri
+    type: String
+    default: "http://mlflow:5000"
+    description: MLflow tracking server endpoint
+  
+  - name: mlflow_s3_endpoint
+    type: String
+    default: "http://minio:9000"
+    description: MinIO endpoint for MLflow artifact storage
+  
+  - name: gateway_url
+    type: String
+    default: "http://fastapi-app:8000"
+    description: FastAPI gateway for MinIO uploads
+  
+  - name: promotion_bucket
+    type: String
+    default: "model-promotion"
+    description: MinIO bucket for promotion history storage
+  
+  - name: rmse_weight
+    type: Float
+    default: 0.5
+    description: Weight for RMSE in composite score calculation
+  
+  - name: mae_weight
+    type: Float
+    default: 0.3
+    description: Weight for MAE in composite score calculation
+  
+  - name: mse_weight
+    type: Float
+    default: 0.2
+    description: Weight for MSE in composite score calculation
+
+outputs:
+  - name: promotion_pointer
+    type: Artifact
+    description: Canonical pointer to selected model (MinIO URI + metadata)
+  
+  - name: eval_metadata
+    type: Artifact
+    description: Detailed evaluation results (scores, metrics, timestamp)
+
+implementation:
+  container:
+    image: eval-container:latest
+    env:
+      - name: USE_KFP
+        value: "1"
+      - name: CONFIG_HASH
+        value: {inputValue: config_hash}
+      - name: IDENTIFIER
+        value: {inputValue: identifier}
+      - name: MLFLOW_TRACKING_URI
+        value: {inputValue: mlflow_tracking_uri}
+      - name: MLFLOW_S3_ENDPOINT_URL
+        value: {inputValue: mlflow_s3_endpoint}
+      - name: GATEWAY_URL
+        value: {inputValue: gateway_url}
+      - name: PROMOTION_BUCKET
+        value: {inputValue: promotion_bucket}
+      - name: SCORE_WEIGHTS
+        value: "{\"rmse\": {inputValue: rmse_weight}, \"mae\": {inputValue: mae_weight}, \"mse\": {inputValue: mse_weight}}"
+      - name: KFP_GRU_MODEL_INPUT_PATH
+        value: {inputPath: gru_model}
+      - name: KFP_LSTM_MODEL_INPUT_PATH
+        value: {inputPath: lstm_model}
+      - name: KFP_PROPHET_MODEL_INPUT_PATH
+        value: {inputPath: prophet_model}
+      - name: KFP_PROMOTION_OUTPUT_PATH
+        value: {outputPath: promotion_pointer}
+      - name: KFP_EVAL_METADATA_OUTPUT_PATH
+        value: {outputPath: eval_metadata}
+      - name: AWS_ACCESS_KEY_ID
+        value: "minio_access_key"
+      - name: AWS_SECRET_ACCESS_KEY
+        value: "minio_secret_key"

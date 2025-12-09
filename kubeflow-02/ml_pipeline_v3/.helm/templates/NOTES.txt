@@ -1,0 +1,97 @@
+FLTS ML Pipeline Deployment - {{ .Chart.Name }} v{{ .Chart.Version }}
+
+✓ Installation complete!
+
+=============================================================================
+ACCESSING SERVICES
+=============================================================================
+
+{{- if .Values.ingress.enabled }}
+External Access (via Ingress):
+{{- range $host := .Values.ingress.hosts }}
+  {{- range .paths }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ $host.host }}{{ .path }}
+  {{- end }}
+{{- end }}
+{{- else }}
+
+Use kubectl port-forward to access services:
+
+Infrastructure:
+  Kafka:
+    kubectl port-forward svc/kafka {{ .Values.kafka.service.port }}:{{ .Values.kafka.service.port }}
+  
+  MinIO Console:
+    kubectl port-forward svc/minio {{ .Values.minio.service.consolePort }}:{{ .Values.minio.service.consolePort }}
+    Access at: http://127.0.0.1:{{ .Values.minio.service.consolePort }}
+    Credentials: {{ .Values.minio.auth.accessKey }} / {{ .Values.minio.auth.secretKey }}
+
+ML Platform:
+  MLflow:
+    kubectl port-forward svc/mlflow {{ .Values.mlflow.service.port }}:{{ .Values.mlflow.service.port }}
+    Access at: http://127.0.0.1:{{ .Values.mlflow.service.port }}
+  
+  FastAPI Gateway:
+    kubectl port-forward svc/fastapi-app {{ .Values.fastapi.service.port }}:{{ .Values.fastapi.service.port }}
+    Access at: http://127.0.0.1:{{ .Values.fastapi.service.port }}
+
+Inference:
+  Inference Service:
+    kubectl port-forward svc/inference {{ .Values.inference.service.port }}:{{ .Values.inference.service.port }}
+    Access at: http://127.0.0.1:{{ .Values.inference.service.port }}
+  
+  Inference Load Balancer:
+    kubectl port-forward svc/inference-lb {{ .Values.inferenceLb.service.port }}:{{ .Values.inferenceLb.service.port }}
+    Access at: http://127.0.0.1:{{ .Values.inferenceLb.service.port }}
+
+{{- if .Values.eval.enabled | default true }}
+  Evaluation Service:
+    kubectl port-forward svc/eval {{ .Values.eval.service.port }}:{{ .Values.eval.service.port }}
+    Access at: http://127.0.0.1:{{ .Values.eval.service.port }}/readyz
+{{- end }}
+
+Monitoring:
+{{- if .Values.prometheus.enabled | default true }}
+  Prometheus:
+    kubectl port-forward svc/prometheus {{ .Values.prometheus.service.port }}:{{ .Values.prometheus.service.port }}
+    Access at: http://127.0.0.1:{{ .Values.prometheus.service.port }}
+{{- end }}
+
+{{- if .Values.grafana.enabled | default true }}
+  Grafana:
+    kubectl port-forward svc/grafana {{ .Values.grafana.service.port }}:{{ .Values.grafana.service.port }}
+    Access at: http://127.0.0.1:{{ .Values.grafana.service.port }}
+    Default login: {{ .Values.grafana.auth.adminUser }} / {{ .Values.grafana.auth.adminPassword }}
+{{- end }}
+
+Load Testing:
+{{- if .Values.locust.enabled | default true }}
+  Locust Master:
+    kubectl port-forward svc/locust-master 8089:8089
+    Access at: http://127.0.0.1:8089
+{{- end }}
+
+{{- end }}
+
+=============================================================================
+NEXT STEPS
+=============================================================================
+
+1. Check all pods are running:
+   kubectl get pods
+
+2. View logs for a specific service:
+   kubectl logs -f deployment/<service-name>
+
+3. Monitor training progress:
+   kubectl logs -f deployment/train-gru
+   kubectl logs -f deployment/train-lstm
+
+4. Check inference scaling (if HPA enabled):
+   kubectl get hpa inference-hpa
+
+5. Run a load test:
+   # Access Locust UI and start a test
+   kubectl port-forward svc/locust-master 8089:8089
+
+For more information, visit: {{ .Chart.Home }}

@@ -1,0 +1,647 @@
+import os, json, time, traceback, threading, tempfile, datetime
+from typing import Dict, Any, Optional, List, Set
+import mlflow
+import pandas as pd
+from dateutil import tz
+import boto3
+
+# Global config import
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'shared'))
+from config import USE_KFP, USE_KAFKA
+
+# Gate Kafka imports behind USE_KAFKA flag
+if USE_KAFKA:
+    from kafka_utils import create_consumer, create_producer, produce_message, publish_error
+
+# Version marker for deployment verification
+EVAL_VERSION = "eval_v20251002_01"
+
+# Structured logging helper
+
+def jlog(event: str, **extra):
+    base = {"service": "eval", "event": event, "ts": datetime.datetime.utcnow().isoformat() + "Z", "version": EVAL_VERSION}
+    base.update({k: v for k, v in extra.items() if v is not None})
+    print(json.dumps(base), flush=True)
+
+# Environment
+KAFKA_BOOTSTRAP_SERVERS = os.environ.get("KAFKA_BOOTSTRAP_SERVERS")
+MODEL_TRAINING_TOPIC = os.environ.get("MODEL_TRAINING_TOPIC", "model-training")
+MODEL_SELECTED_TOPIC = os.environ.get("MODEL_SELECTED_TOPIC", "model-selected")
+GROUP_ID = os.environ.get("EVAL_GROUP_ID", "eval-promoter")
+MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "http://mlflow:5000")
+MINIO_PROMOTION_BUCKET = os.environ.get("PROMOTION_BUCKET", "model-promotion")
+GATEWAY_URL = os.environ.get("GATEWAY_URL", "http://fastapi-app:8000")
+IDENTIFIER_FALLBACK = os.environ.get("IDENTIFIER", "")
+DLQ_TOPIC = os.environ.get("DLQ_MODEL_SELECTED", "DLQ-model-selected")
+SCORE_WEIGHTS = {"rmse": 0.5, "mae": 0.3, "mse": 0.2}
+LOOKBACK_RUNS = int(os.environ.get("LOOKBACK_RUNS", "50"))
+
+# Expected model types for a pipeline config (comma separated env var). Default to GRU,LSTM,PROPHET.
+EXPECTED_MODEL_TYPES: Set[str] = set([m.strip().upper() for m in os.environ.get("EXPECTED_MODEL_TYPES", "GRU,LSTM,PROPHET").split(",") if m.strip()])
+
+# Retry controls to mitigate race where freshly finished runs (e.g., PROPHET) are not yet returned by MLflow search
+PROMOTION_SEARCH_RETRIES = int(os.environ.get("PROMOTION_SEARCH_RETRIES", "3"))
+PROMOTION_SEARCH_DELAY_SEC = float(os.environ.get("PROMOTION_SEARCH_DELAY_SEC", "2"))
+
+# Track completion: config_hash -> set(model_types completed)
+_completion_tracker: Dict[str, Set[str]] = {}
+
+mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+def _ensure_buckets():
+    try:
+        s3 = boto3.client(
+            "s3",
+            endpoint_url=os.environ.get("MLFLOW_S3_ENDPOINT_URL"),
+            aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
+            aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
+            region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"),
+        )
+        required = [
+            os.environ.get("MLFLOW_ARTIFACT_BUCKET", "mlflow"),
+            MINIO_PROMOTION_BUCKET,
+        ]
+        existing = {b.get('Name') for b in s3.list_buckets().get('Buckets', [])}
+        for b in required:
+            if b not in existing:
+                try:
+                    s3.create_bucket(Bucket=b)
+                    jlog("bucket_created", bucket=b)
+                except Exception as ce:  # noqa: BLE001
+                    jlog("bucket_create_fail", bucket=b, error=str(ce))
+            else:
+                jlog("bucket_exists", bucket=b)
+    except Exception as e:  # noqa: BLE001
+        jlog("bucket_ensure_error", error=str(e))
+
+_ensure_buckets()
+
+# Kafka initialization: Only in Kafka mode (deprecated)
+if USE_KAFKA:
+    # Kafka mode: Initialize producer and consumer (deprecated)
+    producer = create_producer()
+    consumer = create_consumer(MODEL_TRAINING_TOPIC, GROUP_ID)
+    jlog("kafka_mode_enabled_deprecated", topic=MODEL_TRAINING_TOPIC, group_id=GROUP_ID)
+else:
+    # KFP mode: Skip Kafka setup (default)
+    producer = None
+    consumer = None
+    jlog("kfp_mode_enabled", note="Kafka producer/consumer skipped")
+
+# Simple MinIO gateway post helper (reusing FASTAPI gateway endpoint)
+import requests
+
+def upload_json(bucket: str, object_name: str, payload: Dict[str, Any]):
+    tmp = tempfile.NamedTemporaryFile(delete=False)
+    try:
+        tmp.write(json.dumps(payload, separators=(",", ":")).encode())
+        tmp.flush()
+        tmp.close()
+        with open(tmp.name, "rb") as fh:
+            files = {"file": (object_name, fh, "application/json")}
+            r = requests.post(f"{GATEWAY_URL}/upload/{bucket}/{object_name}", files=files, timeout=30)
+            if r.status_code != 200:
+                raise RuntimeError(f"Upload failed {r.status_code}: {r.text}")
+    finally:
+        try: os.unlink(tmp.name)
+        except Exception: pass
+
+
+def _write_kfp_artifacts(payload: Dict[str, Any]) -> None:
+    """Write KFP artifact metadata to standard output paths.
+    
+    Replaces Kafka model-selected topic messages with KFP artifacts.
+    """
+    # Promotion pointer artifact (canonical selection result)
+    kfp_promotion_output = os.environ.get("KFP_PROMOTION_OUTPUT_PATH", "/tmp/outputs/promotion_pointer/data")
+    if kfp_promotion_output:
+        os.makedirs(os.path.dirname(kfp_promotion_output), exist_ok=True)
+        with open(kfp_promotion_output, 'w') as f:
+            json.dump({
+                "uri": f"minio://{MINIO_PROMOTION_BUCKET}/current.json",
+                "metadata": payload
+            }, f, separators=(',', ':'))
+    
+    # Eval metadata artifact (detailed scoring results)
+    kfp_eval_metadata_output = os.environ.get("KFP_EVAL_METADATA_OUTPUT_PATH", "/tmp/outputs/eval_metadata/data")
+    if kfp_eval_metadata_output:
+        os.makedirs(os.path.dirname(kfp_eval_metadata_output), exist_ok=True)
+        with open(kfp_eval_metadata_output, 'w') as f:
+            json.dump(payload, f, separators=(',', ':'))
+    
+    jlog("kfp_artifacts_written", run_id=payload.get("run_id"), model_type=payload.get("model_type"), config_hash=payload.get("config_hash"))
+
+
+def _process_kfp_models():
+    """KFP mode: Load model artifacts from Input[Model] x3, evaluate, select best."""
+    if not USE_KFP:
+        return
+    
+    jlog("kfp_eval_start")
+    
+    # Read model artifacts
+    gru_path = os.environ.get("KFP_GRU_MODEL_INPUT_PATH")
+    lstm_path = os.environ.get("KFP_LSTM_MODEL_INPUT_PATH")
+    prophet_path = os.environ.get("KFP_PROPHET_MODEL_INPUT_PATH")
+    
+    model_artifacts = []
+    for path, model_type in [(gru_path, "GRU"), (lstm_path, "LSTM"), (prophet_path, "PROPHET")]:
+        if path and os.path.exists(path):
+            with open(path, 'r') as f:
+                artifact = json.load(f)
+                artifact['model_type'] = model_type
+                model_artifacts.append(artifact)
+                jlog("kfp_model_loaded", model_type=model_type, run_id=artifact.get('metadata', {}).get('run_id'))
+        else:
+            jlog("kfp_model_missing", model_type=model_type, path=path)
+    
+    if len(model_artifacts) < 3:
+        jlog("kfp_eval_insufficient_models", count=len(model_artifacts), expected=3)
+        return
+    
+    # Score models using metadata
+    scored = []
+    for artifact in model_artifacts:
+        meta = artifact.get('metadata', {})
+        model_type = artifact.get('model_type')
+        run_id = meta.get('run_id')
+        
+        # Extract metrics from artifact metadata
+        test_rmse = meta.get('test_rmse', float('inf'))
+        test_mae = meta.get('test_mae', float('inf'))
+        test_mse = meta.get('test_mse', float('inf'))
+        
+        # Compute composite score
+        score = (
+            SCORE_WEIGHTS["rmse"] * test_rmse +
+            SCORE_WEIGHTS["mae"] * test_mae +
+            SCORE_WEIGHTS["mse"] * test_mse
+        )
+        
+        scored.append({
+            'model_type': model_type,
+            'run_id': run_id,
+            'test_rmse': test_rmse,
+            'test_mae': test_mae,
+            'test_mse': test_mse,
+            'score': score,
+            'config_hash': meta.get('config_hash'),
+            'artifact': artifact
+        })
+        
+        jlog("kfp_model_scored", model_type=model_type, run_id=run_id, score=score, rmse=test_rmse, mae=test_mae, mse=test_mse)
+    
+    # Select best (lowest score)
+    scored.sort(key=lambda x: x['score'])
+    best = scored[0]
+    
+    jlog("kfp_best_model_selected", model_type=best['model_type'], run_id=best['run_id'], score=best['score'])
+    
+    # Get identifier from environment or artifact
+    identifier = os.environ.get("IDENTIFIER", best['artifact'].get('metadata', {}).get('identifier', ''))
+    config_hash = best['config_hash'] or identifier or 'default'
+    
+    # Build promotion payload (same structure as Kafka mode)
+    model_uri = best['artifact'].get('uri')
+    payload = {
+        "identifier": identifier,
+        "config_hash": config_hash,
+        "run_id": best['run_id'],
+        "model_type": best['model_type'],
+        "experiment": "KFP-Pipeline",  # KFP mode doesn't have MLflow experiment context
+        "model_uri": model_uri,
+        "rmse": best['test_rmse'],
+        "mae": best['test_mae'],
+        "mse": best['test_mse'],
+        "score": best['score'],
+        "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+        "weights": SCORE_WEIGHTS,
+    }
+    
+    jlog("kfp_promotion_decision", **payload)
+    
+    # Write to MinIO (same as Kafka mode)
+    ts = payload["timestamp"].replace(":", "-")
+    history_obj = f"promotion-{ts}.json"
+    base_path = f"{identifier or 'global'}/{config_hash}"
+    upload_json(MINIO_PROMOTION_BUCKET, f"{base_path}/{history_obj}", payload)
+    upload_json(MINIO_PROMOTION_BUCKET, f"{identifier or 'global'}/current.json", payload)
+    
+    try:
+        upload_json(MINIO_PROMOTION_BUCKET, "current.json", payload)
+        jlog("kfp_root_pointer_write", run_id=payload["run_id"], model_type=payload.get("model_type"), config_hash=config_hash)
+    except Exception as root_ptr_err:  # noqa: BLE001
+        jlog("kfp_root_pointer_fail", error=str(root_ptr_err))
+    
+    # Tag the promoted run in MLflow
+    try:
+        from mlflow.tracking import MlflowClient
+        client = MlflowClient()
+        promoted_run_id = payload["run_id"]
+        client.set_tag(promoted_run_id, "promoted", "true")
+        jlog("kfp_mlflow_tag_set", run_id=promoted_run_id, tag="promoted", value="true")
+    except Exception as tag_err:  # noqa: BLE001
+        jlog("kfp_mlflow_tag_fail", run_id=payload.get("run_id"), error=str(tag_err))
+    
+    # Write KFP artifacts
+    _write_kfp_artifacts(payload)
+    
+    jlog("kfp_eval_complete", run_id=payload["run_id"], config_hash=config_hash)
+
+
+def compute_score(row: pd.Series) -> float:
+    return (
+        SCORE_WEIGHTS["rmse"] * float(row.get("metrics.test_rmse", float("inf"))) +
+        SCORE_WEIGHTS["mae"] * float(row.get("metrics.test_mae", float("inf"))) +
+        SCORE_WEIGHTS["mse"] * float(row.get("metrics.test_mse", float("inf")))
+    )
+
+
+def select_best(runs_df: pd.DataFrame) -> Optional[pd.Series]:
+    if runs_df.empty:
+        return None
+    runs_df = runs_df.copy()
+    
+    model_type_col = "params.model_type"
+    config_hash_col = "params.config_hash"
+    
+    if model_type_col not in runs_df.columns:
+        jlog("promotion_no_model_type_column", available_columns=list(runs_df.columns))
+        return None
+    
+    # LIFECYCLE AWARENESS: Group by config_hash and select most recent lifecycle
+    if config_hash_col in runs_df.columns:
+        # Sort by start_time descending to identify most recent lifecycle
+        runs_df.sort_values(["start_time"], ascending=[False], inplace=True)
+        
+        # Group by config_hash and find the most recent one (first row after sort)
+        config_hashes = runs_df[config_hash_col].dropna().unique()
+        if len(config_hashes) > 0:
+            # Get the config_hash of the most recent run
+            most_recent_config = runs_df[runs_df[config_hash_col].notna()].iloc[0][config_hash_col]
+            
+            # Filter to only runs from this lifecycle
+            lifecycle_runs = runs_df[runs_df[config_hash_col] == most_recent_config]
+            excluded_count = len(runs_df) - len(lifecycle_runs)
+            
+            jlog("promotion_lifecycle_selected", 
+                 config_hash=most_recent_config, 
+                 lifecycle_runs=len(lifecycle_runs), 
+                 excluded_older_runs=excluded_count,
+                 run_ids=lifecycle_runs["run_id"].tolist()[:10])
+            
+            runs_df = lifecycle_runs
+        else:
+            jlog("promotion_no_config_hash_found", warning="No config_hash in runs, proceeding without lifecycle filtering")
+    else:
+        jlog("promotion_no_config_hash_column", warning="config_hash column missing, proceeding without lifecycle filtering")
+    
+    if runs_df.empty:
+        jlog("promotion_no_runs_in_lifecycle")
+        return None
+    
+    # Within the selected lifecycle, limit to most recent 3 runs per model_type
+    # Sort by start_time descending (most recent first)
+    runs_df.sort_values(["start_time"], ascending=[False], inplace=True)
+    
+    # Group by model_type and take top 3 most recent per group
+    recent_runs = []
+    for model_type, group in runs_df.groupby(model_type_col):
+        top_n = group.head(3)
+        recent_runs.append(top_n)
+        jlog("promotion_recent_filtered", model_type=model_type, total_runs=len(group), kept_runs=len(top_n), run_ids=top_n["run_id"].tolist()[:3])
+    
+    if not recent_runs:
+        jlog("promotion_no_recent_runs_after_filter")
+        return None
+    
+    runs_df = pd.concat(recent_runs, ignore_index=True)
+    
+    # Compute composite score for filtered runs
+    runs_df["promotion_score"] = runs_df.apply(compute_score, axis=1)
+    # lowest score wins; tie -> most recent start_time (mlflow stores unix ms)
+    runs_df.sort_values(["promotion_score", "start_time"], ascending=[True, False], inplace=True)
+    # Emit scoreboard log (trim huge DataFrames) before selection
+    try:
+        max_rows = int(os.environ.get("PROMOTION_SCOREBOARD_LIMIT", "50"))
+        view = runs_df.head(max_rows)
+        scoreboard = []
+        for _, r in view.iterrows():
+            st = r.get("start_time")
+            # Convert pandas/np timestamp-like objects to ISO string for JSON
+            try:
+                if hasattr(st, 'to_pydatetime'):
+                    st = st.to_pydatetime()
+                if hasattr(st, 'isoformat'):
+                    st = st.isoformat()
+            except Exception:
+                st = str(st)
+            scoreboard.append({
+                "run_id": r.get("run_id"),
+                "model_type": r.get("params.model_type"),
+                "test_rmse": r.get("metrics.test_rmse"),
+                "test_mae": r.get("metrics.test_mae"),
+                "test_mse": r.get("metrics.test_mse"),
+                "score": r.get("promotion_score"),
+                "start_time": st,
+            })
+        jlog("promotion_scoreboard", rows=len(view), scoreboard=scoreboard)
+    except Exception as sb_err:  # noqa: BLE001
+        jlog("promotion_scoreboard_fail", error=str(sb_err))
+    return runs_df.iloc[0]
+
+
+def promotion_payload(row: pd.Series, identifier: str, config_hash: str) -> Dict[str, Any]:
+    run_id = row.get("run_id")
+    model_type = row.get("params.model_type")
+    experiment_id = row.get("experiment_id")
+    experiment = mlflow.get_experiment(experiment_id).name if experiment_id else ""
+    model_uri = f"runs:/{run_id}/{model_type}" if model_type else f"runs:/{run_id}"
+    return {
+        "identifier": identifier,
+        "config_hash": config_hash,
+        "run_id": run_id,
+        "model_type": model_type,
+        "experiment": experiment,
+        "model_uri": model_uri,
+        "rmse": row.get("metrics.test_rmse"),
+        "mae": row.get("metrics.test_mae"),
+        "mse": row.get("metrics.test_mse"),
+        "score": row.get("promotion_score"),
+        "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+        "weights": SCORE_WEIGHTS,
+    }
+
+
+def process_training_message(msg_value: Dict[str, Any]):
+    try:
+        identifier = msg_value.get("identifier") or IDENTIFIER_FALLBACK
+        config_hash = msg_value.get("config_hash")
+        operation = msg_value.get("operation", "") or ""
+        status = msg_value.get("status")
+        # Only consider final success training messages
+        if status != "SUCCESS" or not operation.startswith("Trained: "):
+            jlog("promotion_ignore", reason="non_success_or_not_trained", operation=operation, status=status)
+            return
+        model_type = operation.replace("Trained: ", "").strip()
+        
+        # Use identifier as grouping key (fallback to "default" if missing)
+        # CACHING DISABLED: config_hash removed, using identifier for synchronization
+        sync_key = identifier if identifier else "default"
+        config_hash = sync_key  # Alias for logging compatibility
+        
+        jlog("promotion_start", identifier=identifier, sync_key=sync_key, model_type=model_type)
+        if sync_key not in _completion_tracker:
+            _completion_tracker[sync_key] = set()
+        if model_type:
+            _completion_tracker[sync_key].add(model_type.upper())
+        missing = sorted(list(EXPECTED_MODEL_TYPES - _completion_tracker[sync_key]))
+        if missing:
+            jlog("promotion_waiting_for_models", sync_key=sync_key, have=sorted(list(_completion_tracker[sync_key])), missing=missing, expected=sorted(list(EXPECTED_MODEL_TYPES)))
+            return
+        jlog("promotion_all_models_present", sync_key=sync_key, models=sorted(list(_completion_tracker[sync_key])))
+        
+        # CACHING DISABLED: Search all recent runs (no config_hash filtering)
+        filter_string = None
+        # Expanded search: include ALL experiments so that heterogeneous model families (e.g. PROPHET in 'NonML' experiment
+        # and GRU/LSTM in another) are all considered. Previously omission of experiment_ids could implicitly scope search
+        # to an active/default experiment, excluding Prophet runs.
+        from mlflow.tracking import MlflowClient  # local import to avoid module load at startup if mlflow unreachable
+        _exp_client = MlflowClient()
+        exp_ids = []
+        experiments_meta = []
+        # Compatibility: prefer search_experiments (newer MLflow), fallback to list_experiments if available
+        try:
+            if hasattr(_exp_client, "search_experiments"):
+                _experiments = _exp_client.search_experiments()
+            elif hasattr(_exp_client, "list_experiments"):
+                _experiments = _exp_client.list_experiments()
+            else:
+                _experiments = []
+            for e in _experiments:
+                exp_ids.append(e.experiment_id)
+                experiments_meta.append({"id": e.experiment_id, "name": getattr(e, "name", "")})
+        except Exception as ee:  # noqa: BLE001
+            jlog("promotion_experiment_enum_fail", error=str(ee))
+        # Fallback: if enumeration failed, try known experiment names directly
+        if not exp_ids:
+            try:
+                # 'Default' is almost always experiment_id '0'; 'NonML' may exist for Prophet
+                named = [mlflow.get_experiment_by_name(n) for n in ["Default", "NonML"]]
+                for ex in named:
+                    if ex:
+                        exp_ids.append(ex.experiment_id)
+                        experiments_meta.append({"id": ex.experiment_id, "name": ex.name})
+            except Exception as en_err:  # noqa: BLE001
+                jlog("promotion_experiment_named_lookup_fail", error=str(en_err))
+        if not exp_ids:
+            jlog("promotion_no_experiments_found", sync_key=sync_key)
+            return
+        try:
+            jlog("promotion_search_experiments", sync_key=sync_key, experiments=experiments_meta)
+        except Exception:
+            pass
+        attempt = 0
+        missing_model_types: Set[str] = set()
+        while True:
+            runs_df = mlflow.search_runs(experiment_ids=exp_ids, filter_string=filter_string, max_results=LOOKBACK_RUNS, output_format="pandas")  # type: ignore
+            present = set()
+            if not runs_df.empty:
+                mt_col = [c for c in runs_df.columns if c == "params.model_type"]
+                if mt_col:
+                    present = set(runs_df[mt_col[0]].dropna().str.upper().tolist())
+            missing_model_types = EXPECTED_MODEL_TYPES - present
+            if runs_df.empty or missing_model_types:
+                if attempt < PROMOTION_SEARCH_RETRIES - 1:
+                    jlog("promotion_search_retry_wait", sync_key=sync_key, attempt=attempt+1, missing=list(missing_model_types), delay=PROMOTION_SEARCH_DELAY_SEC)
+                    time.sleep(PROMOTION_SEARCH_DELAY_SEC)
+                    attempt += 1
+                    continue
+                if runs_df.empty:
+                    jlog("promotion_no_runs", config_hash=config_hash, attempts=attempt+1)
+                    return
+                else:
+                    jlog("promotion_partial_runs", config_hash=config_hash, present=list(present), still_missing=list(missing_model_types), attempts=attempt+1)
+                    break
+            break
+        # DEBUG: emit all runs found prior to artifact filtering to diagnose missing model types (e.g. PROPHET)
+        try:
+            debug_runs = []
+            for _, r in runs_df.iterrows():
+                # Collect all params columns (they are prefixed with 'params.')
+                param_cols = {c.replace('params.', ''): r.get(c) for c in runs_df.columns if c.startswith('params.')}
+                debug_runs.append({
+                    "run_id": r.get("run_id"),
+                    "model_type": r.get("params.model_type"),
+                    "config_hash": r.get("params.config_hash"),
+                    "all_params": param_cols
+                })
+            jlog("promotion_runs_search", config_hash=config_hash, count=len(debug_runs), runs=debug_runs)
+        except Exception as dbg_err:  # noqa: BLE001
+            jlog("promotion_runs_search_fail", config_hash=config_hash, error=str(dbg_err))
+        try:
+            from mlflow.tracking import MlflowClient
+            client = MlflowClient()
+            valid_rows: List[int] = []
+            for idx, row in runs_df.iterrows():
+                r_id = row.get("run_id")
+                mtype = row.get("params.model_type")
+                if not r_id or not mtype:
+                    continue
+                try:
+                    # Primary: look for artifacts under folder named after model_type
+                    arts = client.list_artifacts(r_id, path=mtype)
+                    has_named_folder = bool(arts)
+                    has_any_artifact = has_named_folder
+                    artifact_names = [a.path for a in arts]
+                    # Fallback: if none under model_type, list root artifacts and accept if any exist
+                    if not has_named_folder:
+                        root_arts = client.list_artifacts(r_id)
+                        if root_arts:
+                            has_any_artifact = True
+                            artifact_names.extend([a.path for a in root_arts if a.path not in artifact_names])
+                    # Additional Prophet-specific heuristic: accept if any artifact path contains 'scaler' or 'preprocess'
+                    if not has_named_folder and mtype.upper() == "PROPHET":
+                        # Heuristic 1: any artifacts at all (already covered) OR metrics present in runs_df
+                        if artifact_names:
+                            has_any_artifact = True
+                        else:
+                            # Metrics-based fallback: if the run has test metrics columns populated, treat as valid
+                            metric_cols = [c for c in runs_df.columns if c.startswith("metrics.test_")]
+                            metrics_present = False
+                            if metric_cols:
+                                for mc in metric_cols:
+                                    try:
+                                        val = row.get(mc)
+                                        if val is not None and val == val:  # not NaN
+                                            metrics_present = True
+                                            break
+                                    except Exception:
+                                        continue
+                            if metrics_present:
+                                has_any_artifact = True
+                                artifact_names.append("__metrics_only__")
+                    if has_any_artifact:
+                        valid_rows.append(idx)
+                        jlog("promotion_artifacts_ok", run_id=r_id, model_type=mtype, named_folder=has_named_folder, artifacts=artifact_names[:20])
+                    else:
+                        jlog("promotion_skip_run_no_artifacts", run_id=r_id, model_type=mtype)
+                except Exception as le:  # noqa: BLE001
+                    jlog("promotion_artifact_list_fail", run_id=r_id, model_type=mtype, error=str(le))
+            if not valid_rows:
+                jlog("promotion_no_valid_runs", config_hash=config_hash)
+                return
+            runs_df = runs_df.loc[valid_rows]
+        except Exception as e:  # noqa: BLE001
+            jlog("promotion_artifact_filter_error", error=str(e))
+        best = select_best(runs_df)
+        if best is None:
+            jlog("promotion_no_selection", config_hash=config_hash)
+            return
+        payload = promotion_payload(best, identifier, config_hash)
+        jlog("promotion_decision", **payload)
+        ts = payload["timestamp"].replace(":", "-")
+        history_obj = f"promotion-{ts}.json"
+        base_path = f"{identifier or 'global'}/{config_hash}"
+        upload_json(MINIO_PROMOTION_BUCKET, f"{base_path}/{history_obj}", payload)
+        # Identifier / legacy scoped pointer (global/<config_hash>/..., global/current.json)
+        upload_json(MINIO_PROMOTION_BUCKET, f"{identifier or 'global'}/current.json", payload)
+        # Root-level canonical pointer for simplified autoload (new)
+        try:
+            upload_json(MINIO_PROMOTION_BUCKET, "current.json", payload)
+            jlog("promotion_root_pointer_write", run_id=payload["run_id"], model_type=payload.get("model_type"), config_hash=config_hash)
+        except Exception as root_ptr_err:  # noqa: BLE001
+            jlog("promotion_root_pointer_fail", error=str(root_ptr_err))
+        
+        # Tag the promoted run in MLflow so inference fallback can discover it
+        try:
+            from mlflow.tracking import MlflowClient
+            client = MlflowClient()
+            promoted_run_id = payload["run_id"]
+            client.set_tag(promoted_run_id, "promoted", "true")
+            jlog("promotion_mlflow_tag_set", run_id=promoted_run_id, tag="promoted", value="true")
+        except Exception as tag_err:  # noqa: BLE001
+            jlog("promotion_mlflow_tag_fail", run_id=payload.get("run_id"), error=str(tag_err))
+        
+        # Publish to Kafka (deprecated) or write KFP artifacts (default)
+        if USE_KFP:
+            # KFP mode: Write artifacts (default)
+            _write_kfp_artifacts(payload)
+        elif USE_KAFKA:
+            # Kafka mode: Publish to topic (deprecated)
+            produce_message(producer, MODEL_SELECTED_TOPIC, payload, key="promotion")
+            jlog("promotion_publish", run_id=payload["run_id"], config_hash=config_hash)
+    except Exception as e:  # noqa: BLE001
+        traceback.print_exc()
+        jlog("promotion_error", error=str(e))
+        if USE_KAFKA:
+            publish_error(producer, DLQ_TOPIC, "promotion", "Failure", str(e), msg_value)
+
+
+def main_loop():
+    if USE_KFP:
+        # KFP mode: Process models from artifacts (default)
+        jlog("service_start_kfp_mode")
+        try:
+            _process_kfp_models()
+        except Exception as e:
+            traceback.print_exc()
+            jlog("kfp_eval_error", error=str(e))
+    elif USE_KAFKA:
+        # Kafka mode: Consume messages (deprecated)
+        jlog("service_start_kafka_mode_deprecated", topic=MODEL_TRAINING_TOPIC)
+        for msg in consumer:
+            try:
+                process_training_message(msg.value)
+            except Exception:
+                traceback.print_exc()
+                jlog("message_error")
+    else:
+        jlog("no_mode_enabled", error="Neither USE_KFP nor USE_KAFKA is enabled")
+
+#############################
+# FastAPI health endpoints  #
+#############################
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+import threading as _threading
+
+app = FastAPI()
+_ready = {"kafka": False, "mlflow": False}
+
+@app.get("/healthz")
+def healthz():
+    return {"status": "ok"}
+
+@app.get("/readyz")
+def readyz():
+    ready = all(_ready.values())
+    code = 200 if ready else 503
+    return JSONResponse(status_code=code, content={"status": "ready" if ready else "not_ready", "components": _ready})
+
+def _init_readiness_checks():
+    # Kafka readiness: if consumer assigned at least one partition eventually
+    try:
+        _ready["kafka"] = True  # simplified; consumer already created
+    except Exception:
+        _ready["kafka"] = False
+    # MLflow readiness
+    try:
+        mlflow.search_runs(max_results=1)
+        _ready["mlflow"] = True
+    except Exception:
+        _ready["mlflow"] = False
+
+def _run_service():
+    _init_readiness_checks()
+    main_loop()
+
+def start_background_loop():
+    t = _threading.Thread(target=_run_service, daemon=True)
+    t.start()
+
+start_background_loop()
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8050)
