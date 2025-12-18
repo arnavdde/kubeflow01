@@ -1,0 +1,201 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: flts-config
+  namespace: default
+data:
+  MINIO_ENDPOINT: "minio-service.kubeflow.svc.cluster.local:9000"
+  MLFLOW_TRACKING_URI: "http://mlflow.default.svc.cluster.local:5000"
+  GATEWAY_URL: "http://fastapi-app.default.svc.cluster.local:8000"
+  AWS_DEFAULT_REGION: "us-east-1"
+  AWS_S3_ADDRESSING_STYLE: "path"
+  MINIO_SECURE: "false"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: flts-secrets
+  namespace: default
+type: Opaque
+stringData:
+  MINIO_ACCESS_KEY: "minioadmin"
+  MINIO_SECRET_KEY: "minioadmin"
+  AWS_ACCESS_KEY_ID: "minioadmin"
+  AWS_SECRET_ACCESS_KEY: "minioadmin"
+  POSTGRES_USER: "mlflow"
+  POSTGRES_PASSWORD: "mlflow"
+  POSTGRES_DB: "mlflow"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: default
+spec:
+  ports:
+  - port: 5432
+    targetPort: 5432
+  selector:
+    app: postgres
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:13
+        ports:
+        - containerPort: 5432
+        env:
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: flts-secrets
+              key: POSTGRES_USER
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: flts-secrets
+              key: POSTGRES_PASSWORD
+        - name: POSTGRES_DB
+          valueFrom:
+            secretKeyRef:
+              name: flts-secrets
+              key: POSTGRES_DB
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mlflow
+  namespace: default
+spec:
+  ports:
+  - port: 5000
+    targetPort: 5000
+  selector:
+    app: mlflow
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mlflow
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mlflow
+  template:
+    metadata:
+      labels:
+        app: mlflow
+    spec:
+      containers:
+      - name: mlflow
+        image: ml_pipeline_v3-mlflow:latest
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 5000
+        env:
+        - name: MLFLOW_S3_ENDPOINT_URL
+          value: "http://minio-service.kubeflow.svc.cluster.local:9000"
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: flts-secrets
+              key: AWS_ACCESS_KEY_ID
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: flts-secrets
+              key: AWS_SECRET_ACCESS_KEY
+        - name: AWS_S3_ADDRESSING_STYLE
+          value: "path"
+        - name: AWS_DEFAULT_REGION
+          value: "us-east-1"
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: flts-secrets
+              key: POSTGRES_USER
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: flts-secrets
+              key: POSTGRES_PASSWORD
+        - name: POSTGRES_DB
+          valueFrom:
+            secretKeyRef:
+              name: flts-secrets
+              key: POSTGRES_DB
+        command:
+        - mlflow
+        - server
+        - --backend-store-uri
+        - postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@postgres.default.svc.cluster.local/$(POSTGRES_DB)
+        - --default-artifact-root
+        - s3://mlflow
+        - --host
+        - 0.0.0.0
+        - --port
+        - "5000"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fastapi-app
+  namespace: default
+spec:
+  ports:
+  - port: 8000
+    targetPort: 8000
+  selector:
+    app: fastapi-app
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fastapi-app
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fastapi-app
+  template:
+    metadata:
+      labels:
+        app: fastapi-app
+    spec:
+      containers:
+      - name: fastapi-app
+        image: ml_pipeline_v3-fastapi-app:latest
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8000
+        env:
+        - name: MINIO_ENDPOINT
+          value: "minio-service.kubeflow.svc.cluster.local:9000"
+        - name: MINIO_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: flts-secrets
+              key: MINIO_ACCESS_KEY
+        - name: MINIO_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: flts-secrets
+              key: MINIO_SECRET_KEY

@@ -1,0 +1,7 @@
+{
+  "dataset_name": "PobleSec",
+  "identifier": "local-run-20251209-152415",
+  "train_rows": 12741,
+  "test_rows": 3186,
+  "timestamp": "2025-12-09T15:24:16.430482"
+}
